@@ -35,24 +35,15 @@ DEGRAF_FLOW_GPU/
 ## External Dependencies
 
 ### RAFT (ECCV 2020)
-- Repository: [https://github.com/princeton-vl/RAFT](https://github.com/princeton-vl/RAFT)    
-- **Added files** in this project:
-  - `degraf_raft_matcher.py` – sampling RAFT dense flow at DeGraF feature locations  
-  - `raft_batch_tcp_server.py` – TCP server for batch inference  
-  - `Dockerfile` – defines RAFT environment (PyTorch + CUDA)  
-  - `run_raft_tcp_server.sh` – helper script to launch RAFT container  
+- Repository: [https://github.com/princeton-vl/RAFT](https://github.com/princeton-vl/RAFT)
+- Kept for ONNX export only: `export_raft_onnx.py` and the network files under `core/` (`raft.py`, `update.py`, `extractor.py`, `corr.py`, `utils/utils.py`).
+- Inference runs from a TensorRT `.engine` inside the C++ process. Training scripts, the demo, and the old TCP server are not in this branch.
 
 ### InterpoNet (CVPR 2017)
-- Repository: [https://github.com/shayzweig/InterpoNet](https://github.com/shayzweig/InterpoNet)    
-- **Modified files** (replace originals with the provided versions in this repo):
-  - `InterpoNet.py`  
-  - `io_utils.py`  
-  - `utils.py`  
-  - `model.py`  
-- **Added files**:
-  - `interponet_batch_tcp_server.py` – TCP server for batch interpolation  
-  - `Dockerfile` – defines InterpoNet environment (TensorFlow 1.15 + CUDA 10.x)  
-  - `enter_interponet.sh` – helper script to enter the container  
+- Repository: [https://github.com/shayzweig/InterpoNet](https://github.com/shayzweig/InterpoNet)
+- Kept for ONNX export: `export_interponet_onnx.py` and `model.py`.
+- `SrcVariational/` is still compiled into the C++ binary for the optional variational refine.
+- Inference runs from a TensorRT `.engine`. The original Python driver and TCP server are not in this branch.
 
 ---
 
@@ -62,9 +53,9 @@ DEGRAF_FLOW_GPU/
   - CUDA ≥ 12.0  
   - OpenCV 4.9 (built with `optflow`, `ximgproc`)  
   - CMake ≥ 3.12, GCC ≥ 9
-- **Python/Docker**
-  - Docker with GPU support (`nvidia-docker2` or `--gpus all`)  
-  - Separate containers for **RAFT** (PyTorch) and **InterpoNet** (TF1.15)  
+- **TensorRT** (optional, required for the RAFT / InterpoNet GPU path)
+  - A prebuilt `.engine` for this GPU, or ONNX export plus `trtexec` on the target machine
+  - Python is only needed again when re-exporting ONNX (PyTorch for RAFT, TensorFlow 1 for InterpoNet)
 
 ---
 
@@ -101,25 +92,7 @@ data/
 
 ## Running the Pipeline
 
-1. **Start RAFT server**
-
-```bash
-cd external/RAFT
-./run_raft_tcp_server.sh
-# Inside container:
-python raft_batch_tcp_server.py
-```
-
-2. **Start InterpoNet server**
-
-```bash
-cd external/InterpoNet
-./enter_interponet.sh
-# Inside container:
-python interponet_batch_tcp_server.py
-```
-
-3. **Run C++ main program**
+Point `DEGRAF_RAFT_ENGINE_PATH` and `DEGRAF_INTERPONET_ENGINE_PATH` at the engines built for this GPU, or use `run_gpu_pipeline.sh`, which sets those paths. Then:
 
 ```bash
 ./build/degraf_flow
@@ -128,10 +101,9 @@ python interponet_batch_tcp_server.py
 This will:
 
 - Extract DeGraF features (CUDA)
-- Request RAFT dense flow, sample at features
-- Send sparse matches to InterpoNet server
-- Receive interpolated dense flow
-- Write KITTI-format outputs to `/data/outputs/`
+- Run RAFT in-process with TensorRT and sample at those features
+- Densify the sparse matches with InterpoNet (EPIC if the engine fails to load)
+- Write KITTI-format outputs under `data/outputs/`
 
 ---
 
@@ -184,10 +156,8 @@ flowchart LR
     %% 推理 pipeline
     subgraph pipeline["Scene-flow pipeline (C++ & CUDA)"]
         D["CUDA DeGraF<br/>degraf_detector.cu"]
-        RC["RAFT client (C++)"]
-        RCont["RAFT container (TCP)"]
-        IC["InterpoNet client (C++)"]
-        ICont["InterpoNet container (TCP)"]
+        R["RaftEngineTRT"]
+        I["InterpoNetEngineTRT"]
         F["FeatureMatcher.cpp<br/>predicted optical flow"]
         S["SceneFlowReconstructor.cpp<br/>predicted scene flow"]
     end
@@ -202,11 +172,9 @@ flowchart LR
 
     %% data flow 只保留核心数据流
     K --> D
-    D --> RC
-    RC <--> RCont
-    RC --> IC
-    IC <--> ICont
-    ICont --> F
+    D --> R
+    R --> I
+    I --> F
     F --> S
 
     %% evaluation 使用 KITTI GT + 预测结果

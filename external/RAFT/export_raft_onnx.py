@@ -43,7 +43,7 @@ class _RaftOnnxWrapper(nn.Module):
 
 
 def _align_to_multiple_of_8(v: int) -> int:
-    return ((v + 7) // 8) * 8
+    return ((v + 7) // 8) * 8 # 对齐到8的倍数
 
 
 def _normalize_state_dict(raw_state):
@@ -83,8 +83,8 @@ def main() -> int:
     model.eval()
     wrapper = _RaftOnnxWrapper(model, args.iters).eval()
 
-    export_h = _align_to_multiple_of_8(args.height)
-    export_w = _align_to_multiple_of_8(args.width)
+    export_h = _align_to_multiple_of_8(args.height) # 对齐到8的倍数
+    export_w = _align_to_multiple_of_8(args.width) # 对齐到8的倍数  
     if export_h != args.height or export_w != args.width:
         print(
             f"[WARN] RAFT expects H/W multiples of 8. "
@@ -92,18 +92,18 @@ def main() -> int:
             f"to ({export_h},{export_w})."
         )
 
-    img1 = torch.randn(1, 3, export_h, export_w, dtype=torch.float32)
-    img2 = torch.randn(1, 3, export_h, export_w, dtype=torch.float32)
+    img1 = torch.randn(1, 3, export_h, export_w, dtype=torch.float32) # 随机生成输入图像
+    img2 = torch.randn(1, 3, export_h, export_w, dtype=torch.float32) # 随机生成输入图像
 
     with torch.no_grad():
-        torch.onnx.export(
-            wrapper,
+        torch.onnx.export( # 导出ONNX模型
+            wrapper, # 包装器
             (img1, img2),
-            args.output,
-            opset_version=17,
-            input_names=["image1", "image2"],
-            output_names=["flow_low", "flow_up"],
-            dynamic_axes={
+            args.output, # 输出路径
+            opset_version=17, # ONNX opset 版本
+            input_names=["image1", "image2"], # 输入名称
+            output_names=["flow_low", "flow_up"], # 输出名称    
+            dynamic_axes={ # 动态轴
                 "image1": {0: "batch", 2: "height", 3: "width"},
                 "image2": {0: "batch", 2: "height", 3: "width"},
                 "flow_low": {0: "batch", 2: "height", 3: "width"},
