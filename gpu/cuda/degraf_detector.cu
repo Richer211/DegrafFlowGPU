@@ -123,7 +123,7 @@ __global__ void computeGradientsEnhancedKernel(
     // Initialize accumulators
     float divident_high_x = 0.0f; // 质心X方向的分子
     float divident_high_y = 0.0f; // 质心Y方向的分子
-    float divisor_high = 0.0f;    // 质心方向的分母
+    float divisor_high = 0.0f;    // 质心方向的分母, 也就是亮度总和
     int counter = 0;              // 计数器 用于统计窗口内像素的总数
 
     // Gradient computation for edge response calculation
@@ -186,13 +186,13 @@ __global__ void computeGradientsEnhancedKernel(
         {
             for (int j = 0; j < window_width; j++)
             {
-                int img_y = window_start_y + i;                              // 当前像素在整张图中的Y坐标
-                int img_x = window_start_x + j;                              // 当前像素在整张图中的X坐标
-                float pixel_value = image_data[img_y * image_width + img_x]; // 当前像素的值
+                int img_y = window_start_y + i;                              // 当前像素在整张图中的Y坐标, 也就是行坐标
+                int img_x = window_start_x + j;                              // 当前像素在整张图中的X坐标, 也就是列坐标
+                float pixel_value = image_data[img_y * image_width + img_x]; // 当前像素的值, 也就是亮度值
 
-                divident_high_x += (float)img_x * pixel_value; // 计算x坐标的像素值加权
-                divident_high_y += (float)img_y * pixel_value; // 计算y坐标的像素值加权
-                divisor_high += pixel_value;                   // 计算像素值的总和
+                divident_high_x += (float)img_x * pixel_value; // 计算x坐标的像素值加权, 也就是列坐标 * 亮度值
+                divident_high_y += (float)img_y * pixel_value; // 计算y坐标的像素值加权, 也就是行坐标 * 亮度值
+                divisor_high += pixel_value;                   // 计算像素值的总和，也就是亮度总和
                 counter++;                                     // 计数器加1
 
                 // Compute gradients for edge response

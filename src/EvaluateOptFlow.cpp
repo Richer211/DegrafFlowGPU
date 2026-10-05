@@ -14,12 +14,12 @@ using namespace cv;
 using namespace cv::optflow;
 using namespace std;
 
-static String getDataSceneFlowRoot()
+static String getDataSceneFlowRoot() // 获取数据集根目录
 {
-    const char *env_path = std::getenv("DEGRAF_DATA_PATH");
-    if (env_path && std::string(env_path).size() > 0)
-        return String(env_path);
-    return String("/root/autodl-tmp/data/kitti/data_scene_flow");
+    const char *env_path = std::getenv("DEGRAF_DATA_PATH"); // 获取环境变量DEGRAF_DATA_PATH的值
+    if (env_path && std::string(env_path).size() > 0) // 如果环境变量DEGRAF_DATA_PATH的值不为空且长度大于0
+        return String(env_path); // 将环境变量DEGRAF_DATA_PATH的值转换为String类型，并返回
+    return String("/root/autodl-tmp/data/kitti/data_scene_flow"); // 如果环境变量DEGRAF_DATA_PATH的值为空或长度为0，则返回默认值"/root/autodl-tmp/data/kitti/data_scene_flow"
 }
 
 static std::string getKittiProtocol()
@@ -421,26 +421,26 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
     // =====================================================
     // Step 1: Data Preparation
     // =====================================================
-    struct ImagePairData {
-        Mat i1, i2;
-        String i1_path, i2_path, groundtruth_path;
-        String num_str;
-        int image_no;
+    struct ImagePairData {//定义一个结构体，用于存储图像对数据
+        Mat i1, i2; // 存储第一张和第二张图像
+        String i1_path, i2_path, groundtruth_path; // 存储第一张和第二张图像的路径，以及地面truth路径
+        String num_str; // 存储图像编号
+        int image_no; // 存储图像索引
     };
     
-    std::vector<ImagePairData> batch_data;
-    batch_data.reserve(image_indices.size());
+    std::vector<ImagePairData> batch_data; // 存储图像对数据
+    batch_data.reserve(image_indices.size()); // 预留空间，避免频繁扩容
     
     // load all data
-    for (int image_no : image_indices) {
-        ImagePairData data;
-        data.image_no = image_no;
+    for (int image_no : image_indices) { // image_indices表示要处理的图像索引列表, for循环遍历每个图像索引
+        ImagePairData data; // 创建一个ImagePairData对象，用于存储图像对数据
+        data.image_no = image_no; // 设置图像索引
         
-        char num[7];
-        sprintf(num, "%06d", image_no);
-        data.num_str = String(num);
+        char num[7]; // 创建一个字符数组，用于存储图像编号
+        sprintf(num, "%06d", image_no); // 将图像索引转换为字符串，并存储到num中
+        data.num_str = String(num); // 将num转换为String类型，并存储到data.num_str中
         
-        String data_root = getDataSceneFlowRoot();
+        String data_root = getDataSceneFlowRoot(); // 获取数据集根目录
         String base_dir = data_root + "/training/";
         data.i1_path = base_dir + "image_2/" + data.num_str + "_10.png";
         data.i2_path = base_dir + "image_2/" + data.num_str + "_11.png";
@@ -453,8 +453,8 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
         data.groundtruth_path = flow_path;
         
 
-        data.i1 = imread(data.i1_path, 1);
-        data.i2 = imread(data.i2_path, 1);
+        data.i1 = imread(data.i1_path, 1); // 读取第一张图像
+        data.i2 = imread(data.i2_path, 1); // 读取第二张图像
         
         if (!data.i1.data || !data.i2.data || data.i1.empty() || data.i2.empty()) {
             printf("No image data \n");
@@ -729,8 +729,8 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
                     // Display all useful output images in one frame 
                     Mat win_mat(Size(data.i1.cols * 2, data.i1.rows * 3), CV_8UC3);
 
-                    imwrite("../data/outputs/010_01.png", data.i1);
-                    imwrite("../data/outputs/010_11.png", data.i2);
+                    imwrite("../data/outputs/010_01.png", data.i1); // 保存第一张图像
+                    imwrite("../data/outputs/010_11.png", data.i2); // 保存第二张图像
                     
 					// Generate DeGraF feature points visualization 
 					if (method == "degraf_flow_lk" || method == "degraf_flow_rlof" || method == "degraf_flow_interponet") {

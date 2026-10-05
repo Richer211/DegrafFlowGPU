@@ -221,10 +221,10 @@ int SaliencyDetector::DoGoS_Saliency(IplImage *p_image_src, IplImage *p_image_de
         cv::Mat level0_f32, level_inv0_f32;
         level0_mat.convertTo(level0_f32, CV_32F);
         level_inv0_mat.convertTo(level_inv0_f32, CV_32F);
-
-        cv::absdiff(level0_f32, level_inv0_f32, matrix_ratio_mat);
-        cv::add(level_inv0_f32, level0_f32, matrix_ratio_inv_mat);
-        cv::divide(matrix_ratio_mat, matrix_ratio_inv_mat, saliency_matrix_mat);
+        // cv::absdiff:是做什么的？计算两张图的差值，cv::add:是做什么的？计算两张图的和，cv::divide:是做什么的？计算两张图的比值
+        cv::absdiff(level0_f32, level_inv0_f32, matrix_ratio_mat); // 计算两张图的差值, 也就是两张图的差异性
+        cv::add(level_inv0_f32, level0_f32, matrix_ratio_inv_mat); // 计算两张图的和, 也就是两张图的相似性
+        cv::divide(matrix_ratio_mat, matrix_ratio_inv_mat, saliency_matrix_mat); // 计算两张图的比值, 也就是两张图的差异性除以相似性
         saliency_matrix_mat.convertTo(image_8u_mat, CV_8UC1, 255.0);
 
         // Low-pass filter

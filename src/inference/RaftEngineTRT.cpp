@@ -81,8 +81,8 @@ cv::Mat adaptImageToStaticDims(const cv::Mat &src, int dst_h, int dst_w)
 std::string toLower(std::string s)
 {
     for (char &c : s)
-        c = static_cast<char>(std::tolower(c));
-    return s;
+        c = static_cast<char>(std::tolower(c)); // 将字符串转换为小写
+    return s; // 返回转换后的字符串
 }
 
 bool dumpMatchesToFile(const std::string &path, const SparseFlowMatches &matches)
@@ -165,37 +165,40 @@ float halfToFloat(uint16_t h)
     std::memcpy(&out, &fbits, sizeof(float));
     return out;
 }
+/**
+ * chw 整张光流表，channel, height, width
+ * channel 通道数，height 高度，width 宽度
+ * h 高度，w 宽度
+ * y 高度，x 宽度
+ * zero_padding 是否填充0, 点落到图外时，这一格按 0 算
+ */
+float bilinearSample(const std::vector<float> &chw,int channel,int h, int w,float y, float x,bool zero_padding) 
+{ 
+    const int x0 = static_cast<int>(std::floor(x));// 计算x的整数部分
+    const int x1 = x0 + 1; // 计算x的下一个整数部分，1表示x的下一个整数部分
+    const int y0 = static_cast<int>(std::floor(y)); // 计算y的整数部分
+    const int y1 = y0 + 1; // 计算y的下一个整数部分，1表示y的下一个整数部分
 
-float bilinearSample(const std::vector<float> &chw,
-                     int channel,
-                     int h, int w,
-                     float y, float x,
-                     bool zero_padding)
-{
-    const int x0 = static_cast<int>(std::floor(x));
-    const int x1 = x0 + 1;
-    const int y0 = static_cast<int>(std::floor(y));
-    const int y1 = y0 + 1;
-
-    const float wx = x - static_cast<float>(x0);
-    const float wy = y - static_cast<float>(y0);
-
+    const float wx = x - static_cast<float>(x0); // 计算x的权重
+    const float wy = y - static_cast<float>(y0); // 计算y的权重
+    // channel = 0 时，idx 落在前半张表，读到 du。channel = 1 时，跳过前半张，读到同一个 (x, y) 上的 dv。
+    // 特征点还是那一个，只是这个位置上的两个数要各读一次。
     const auto at = [&](int yy, int xx) -> float {
         if (yy < 0 || yy >= h || xx < 0 || xx >= w)
             return zero_padding ? 0.0f : chw[static_cast<size_t>(channel) * h * w +
                                                static_cast<size_t>(std::max(0, std::min(h - 1, yy))) * w +
                                                std::max(0, std::min(w - 1, xx))];
         const size_t idx = static_cast<size_t>(channel) * h * w + static_cast<size_t>(yy) * w + xx;
-        return chw[idx];
+        return chw[idx]; // 返回通道为channel，坐标为(xx, yy)的像素值
     };
-
-    const float v00 = at(y0, x0);
-    const float v01 = at(y0, x1);
-    const float v10 = at(y1, x0);
-    const float v11 = at(y1, x1);
-    const float v0 = v00 * (1.0f - wx) + v01 * wx;
-    const float v1 = v10 * (1.0f - wx) + v11 * wx;
-    return v0 * (1.0f - wy) + v1 * wy;
+    // 四个角的名字只有 v00、v01、v10、v11，没有 v02、v03。下标第一位是行，第二位是列：0 是左或上，1 是右或下。v00表示左上角，v01表示右上角，v10表示左下角，v11表示右下角。
+    const float v00 = at(y0, x0); // 左上，坐标为(x0, y0)的像素值
+    const float v01 = at(y0, x1); // 右上，坐标为(x1, y0)的像素值
+    const float v10 = at(y1, x0); // 左下，坐标为(x0, y1)的像素值
+    const float v11 = at(y1, x1); // 右下，坐标为(x1, y1)的像素值
+    const float v0 = v00 * (1.0f - wx) + v01 * wx; // 上面这一横
+    const float v1 = v10 * (1.0f - wx) + v11 * wx; // 下面这一横
+    return v0 * (1.0f - wy) + v1 * wy; // 上下再掺成一个数  v0 是上面左右两格掺完的一个数。v1 是下面左右两格掺完的一个数
 }
 
 bool runLkFallback(
@@ -323,24 +326,24 @@ public:
             return false;
 
         std::vector<char> engine_data(static_cast<size_t>(size));
-        file.read(engine_data.data(), size);
+        file.read(engine_data.data(), size); // 读取引擎数据engine
         if (!file.good())
             return false;
 
-        runtime_.reset(nvinfer1::createInferRuntime(logger_));
+        runtime_.reset(nvinfer1::createInferRuntime(logger_)); // 创建推理运行时
         if (!runtime_)
             return false;
-        engine_.reset(runtime_->deserializeCudaEngine(engine_data.data(), engine_data.size()));
+        engine_.reset(runtime_->deserializeCudaEngine(engine_data.data(), engine_data.size())); // 反序列化CUDA引擎
         if (!engine_)
             return false;
-        context_.reset(engine_->createExecutionContext());
+        context_.reset(engine_->createExecutionContext()); // 创建执行上下文
         if (!context_)
             return false;
 
-        if (!resolveBindings())
+        if (!resolveBindings()) // 解析绑定
             return false;
 
-        initialized_ = true;
+        initialized_ = true; // 初始化成功
         return true;
     }
 
@@ -456,8 +459,8 @@ public:
         toCHWFloat(img2_pad, in1);
 
 #if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
-        void *in0_dev = nullptr;
-        void *in1_dev = nullptr;
+        void *in0_dev = nullptr; 
+        void *in1_dev = nullptr; 
         void *out_dev = nullptr;
         if (!allocDeviceByName(input0_name_, in_elems * sizeof(float), in0_dev) ||
             !allocDeviceByName(input1_name_, in_elems * sizeof(float), in1_dev))
@@ -480,6 +483,8 @@ public:
             if (!allocDeviceByName(name, od_elems * od_elem_bytes, tmp))
                 return false;
         }
+        // 将输入数据从主机内存复制到设备内存
+        // cudaMemcpy(in0_dev, in0.data(), in_elems * sizeof(float), cudaMemcpyHostToDevice) 表示将 in0 从主机内存复制到设备内存
 
         if (cudaMemcpy(in0_dev, in0.data(), in_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess ||
             cudaMemcpy(in1_dev, in1.data(), in_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess)
@@ -496,8 +501,8 @@ public:
             if (!context_->setTensorAddress(name.c_str(), ptr))
                 return false;
         }
-        if (!context_->enqueueV3(0))
-            return false;
+        if (!context_->enqueueV3(0)) // 返回失败，或 engine 文件打不开
+            return false;           // 返回 false
 
         std::cout << "[PROFILE][RaftEngineTRT][infer] selected_output=" << selected_output_name
                   << " dtype=" << static_cast<int>(primary_dtype)
@@ -940,16 +945,16 @@ bool RaftEngineTRT::estimateMatchesBatch(
         const auto t1 = std::chrono::high_resolution_clock::now();
         const double trt_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t1 - t0).count();
         total_trt_ms += trt_ms;
-
-        std::vector<float> flow_chw(static_cast<size_t>(2) * dense_flow.rows * dense_flow.cols, 0.0f);
+        // flow_chw 代表整个光流表，2 层，每层是 dense_flow.rows * dense_flow.cols 个数
+        std::vector<float> flow_chw(static_cast<size_t>(2) * dense_flow.rows * dense_flow.cols, 0.0f); // flow_chw 表示 2 层，每层是 dense_flow.rows * dense_flow.cols 个数
         for (int yy = 0; yy < dense_flow.rows; ++yy)
         {
             const cv::Vec2f *row = dense_flow.ptr<cv::Vec2f>(yy);
             for (int xx = 0; xx < dense_flow.cols; ++xx)
             {
                 const size_t hw = static_cast<size_t>(yy) * dense_flow.cols + xx;
-                flow_chw[hw] = row[xx][0];
-                flow_chw[static_cast<size_t>(dense_flow.rows) * dense_flow.cols + hw] = row[xx][1];
+                flow_chw[hw] = row[xx][0]; // 获取x方向的偏移量，放进第 0 层，第 0 层是x方向的偏移量
+                flow_chw[static_cast<size_t>(dense_flow.rows) * dense_flow.cols + hw] = row[xx][1]; // 获取y方向的偏移量，放进第 1 层，第 1 层是y方向的偏移量
             }
         }
 
@@ -976,9 +981,9 @@ bool RaftEngineTRT::estimateMatchesBatch(
             if (require_sample_in_bounds &&
                 (fx < 0 || fy < 0 || fx >= dense_flow.cols || fy >= dense_flow.rows))
                 continue;
-
-            const float du = bilinearSample(flow_chw, 0, dense_flow.rows, dense_flow.cols, fy, fx, sample_zero_padding);
-            const float dv = bilinearSample(flow_chw, 1, dense_flow.rows, dense_flow.cols, fy, fx, sample_zero_padding);
+            // bilinearSample 一次只从一层里读出一个数，读哪一层由 channel * h * w 决定：
+            const float du = bilinearSample(flow_chw, 0, dense_flow.rows, dense_flow.cols, fy, fx, sample_zero_padding); // 获取x方向的偏移量
+            const float dv = bilinearSample(flow_chw, 1, dense_flow.rows, dense_flow.cols, fy, fx, sample_zero_padding); // 获取y方向的偏移量
 
             // Legacy mode follows existing scale-based mapping.
             // pad_aware mode samples at InputPadder(kitti) coordinates directly.
@@ -993,7 +998,11 @@ bool RaftEngineTRT::estimateMatchesBatch(
             if (require_dst_in_bounds &&
                 (d.x < 0 || d.y < 0 || d.x >= batch_i2[i].cols || d.y >= batch_i2[i].rows))
                 continue;
-            matches.src_points.push_back(p);
+            // 将源图像中的特征点和平移后的特征点加入到匹配结果中
+            // p 是第 10 帧上的特征点，d 是查表加出来的终点。它们分别放进 matches 的两份名单：
+            // src_points[0] 配 dst_points[0]，src_points[1] 配 dst_points[1]。
+            // 上面用 continue 跳过的点不会进这两份名单。
+            matches.src_points.push_back(p); 
             matches.dst_points.push_back(d);
         }
 

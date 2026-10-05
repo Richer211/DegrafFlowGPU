@@ -118,17 +118,21 @@ inline void detectDegrafPointsForInterpoNet(
     IplImage *fromIpl = cvCreateImageHeader(cvSize(img.cols, img.rows), IPL_DEPTH_8U, img.channels());
     cvSetData(fromIpl, const_cast<uchar *>(img.data), img.step);
     cv::Mat dogMat = cv::Mat::zeros(s.height, s.width, CV_8UC3);
-    IplImage *dogIpl = cvCreateImageHeader(cvSize(dogMat.cols, dogMat.rows), IPL_DEPTH_8U, dogMat.channels());
+    IplImage *dogIpl = cvCreateImageHeader(cvSize(dogMat.cols, dogMat.rows), IPL_DEPTH_8U, dogMat.channels()); // 创建dogIpl图像
     cvSetData(dogIpl, dogMat.data, dogMat.step);
-
+    /**
+	 * saliency_mat 是送进检测器的那张图，尺寸和第 10 帧一样，但格子里不是照片的原始亮度。
+	 * DoGoS_Saliency 先把第 10 帧转成灰度，再和它的模糊版本做差。
+	 * 结构清楚的地方在这张图上更亮，平坦的地方更暗。窗口里算质心时用的「亮度」，就是这张图上的数。
+	 */
     SaliencyDetector saliency_detector;
     saliency_detector.DoGoS_Saliency(fromIpl, dogIpl, saliency_kernel, true, true);
     saliency_detector.Release();
 
     cv::Mat saliency_mat = cv::cvarrToMat(dogIpl);
-#if USE_CUDA
+#if USE_CUDA 
     CudaGradientDetector *gpu_gradient_detector = new CudaGradientDetector();
-    gpu_gradient_detector->CudaDetectGradients(
+    gpu_gradient_detector->CudaDetectGradients( 
         saliency_mat, degraf_window_w, degraf_window_h, degraf_step_x, degraf_step_y);
     cv::KeyPoint::convert(gpu_gradient_detector->GetKeypoints(), points);
     delete gpu_gradient_detector;
@@ -575,12 +579,12 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 	cv::Ptr<cv::optflow::RLOFOpticalFlowParameter> rlof_param = 
 		cv::makePtr<cv::optflow::RLOFOpticalFlowParameter>();
 
-	rlof_param->useIlluminationModel = true;
-	rlof_param->useGlobalMotionPrior = true;
-	rlof_param->smallWinSize = 10;
-	rlof_param->largeWinSize = 11;
-	rlof_param->maxLevel = 4;
-	rlof_param->maxIteration = 30;
+	rlof_param->useIlluminationModel = true; // 使用光照模型
+	rlof_param->useGlobalMotionPrior = true; // 使用全局运动先验
+	rlof_param->smallWinSize = 10; // 小窗口大小
+	rlof_param->largeWinSize = 11; // 大窗口大小
+	rlof_param->maxLevel = 4; // 最大金字塔层数
+	rlof_param->maxIteration = 30; // 最大迭代次数
 	rlof_param->supportRegionType = cv::optflow::SR_FIXED;
 	// Create RLOF optical flow estimator
 	cv::Ptr<cv::optflow::SparseRLOFOpticalFlow> proc =
@@ -611,11 +615,13 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 	int max_flow_length = 100;
 	for (unsigned int i = 0; i < points.size() && i < currPoints.size(); i++)
 	{
+		// points[i] 是起点，currPoints[i] 是 RLOF 找到的终点。只有 status 通过、位移没超过 100 像素、而且两点都在图里，才加进去：
 		if (status[i] && 
 			sqrt(pow(points[i].x - currPoints[i].x, 2) + pow(points[i].y - currPoints[i].y, 2)) < max_flow_length &&
 			currPoints[i].x >= 0 && currPoints[i].x < cur.cols && currPoints[i].y < cur.rows && currPoints[i].y >= 0 &&
 			points[i].x >= 0 && points[i].x < prev.cols && points[i].y < prev.rows && points[i].y >= 0)
 		{
+			// points_filtered 就是起点名单，dst_points_filtered 就是终点名单。
 			points_filtered.push_back(points[i]);
 			dst_points_filtered.push_back(currPoints[i]); 
 		}
@@ -637,11 +643,11 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 	Mat dense_flow = flow.getMat();
 
 	Ptr<ximgproc::EdgeAwareInterpolator> gd = ximgproc::createEdgeAwareInterpolator();
-	gd->setK(k);
-	gd->setSigma(sigma);
-	gd->setUsePostProcessing(use_post_proc);
-	gd->setFGSLambda(fgs_lambda);
-	gd->setFGSSigma(fgs_sigma);
+	gd->setK(k); // 找多少个已经有起点和终点的点，默认是 100
+	gd->setSigma(sigma); // 高斯模糊的sigma，默认是 1.0
+	gd->setUsePostProcessing(use_post_proc); // 是否使用后处理，默认是 true
+	gd->setFGSLambda(fgs_lambda); // 是否使用FGS，默认是 true
+	gd->setFGSSigma(fgs_sigma); // FGS的sigma，默认是 1.0
 
 	gd->interpolate(prev, points_filtered, cur, dst_points_filtered, dense_flow);
 
@@ -751,8 +757,8 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     // =====================================================
     // Step 2: RAFT in-process sparse matching
     // =====================================================
-    std::vector<SparseFlowMatches> batch_matches;
-    std::vector<SparseFlowMatches> batch_matches_ba;
+    std::vector<SparseFlowMatches> batch_matches; // 用于稀疏匹配的匹配结果
+    std::vector<SparseFlowMatches> batch_matches_ba; // 用于BA匹配的匹配结果
     bool loaded_all_matches = false;
     if (!matches_input_dir.empty())
     {
