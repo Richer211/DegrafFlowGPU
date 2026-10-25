@@ -62,11 +62,9 @@ void SaliencyDetector::Create(IplImage *p_image, uint p_pyr_levels)
     pyramid->Create(temp_image_32f, pyramid_height);
     pyramid_inv = new ImagePyramid();
     pyramid_inv->Create(temp_image_32f, pyramid_height);
-    std::cout << "cvSetData for level 111" << std::endl;
     // Initialise image arrays
     image_3ch = new ImageArray();
     image_3ch->InitArray(temp_image_32f, 3);
-    std::cout << "cvSetData for level 222" << std::endl;
     // Initialise images using cv::Mat
     saliency_matrix_mat = cv::Mat::zeros(image_size.height, image_size.width, CV_32FC1);
     matrix_ratio_mat = cv::Mat::zeros(image_size.height, image_size.width, CV_32FC1);
@@ -85,7 +83,6 @@ void SaliencyDetector::Create(IplImage *p_image, uint p_pyr_levels)
     cvSetData(matrix_min_ratio, matrix_min_ratio_mat.data, matrix_min_ratio_mat.step);
     unit_matrix = cvCreateImageHeader(cvSize(unit_matrix_mat.cols, unit_matrix_mat.rows), IPL_DEPTH_32F, 1);
     cvSetData(unit_matrix, unit_matrix_mat.data, unit_matrix_mat.step);
-    std::cout << "cvSetData for level 333" << std::endl;
     // Set initialisation flag
     init_status = true;
 }
@@ -224,10 +221,10 @@ int SaliencyDetector::DoGoS_Saliency(IplImage *p_image_src, IplImage *p_image_de
         cv::Mat level0_f32, level_inv0_f32;
         level0_mat.convertTo(level0_f32, CV_32F);
         level_inv0_mat.convertTo(level_inv0_f32, CV_32F);
-
-        cv::absdiff(level0_f32, level_inv0_f32, matrix_ratio_mat);
-        cv::add(level_inv0_f32, level0_f32, matrix_ratio_inv_mat);
-        cv::divide(matrix_ratio_mat, matrix_ratio_inv_mat, saliency_matrix_mat);
+        // cv::absdiff:是做什么的？计算两张图的差值，cv::add:是做什么的？计算两张图的和，cv::divide:是做什么的？计算两张图的比值
+        cv::absdiff(level0_f32, level_inv0_f32, matrix_ratio_mat); // 计算两张图的差值, 也就是两张图的差异性
+        cv::add(level_inv0_f32, level0_f32, matrix_ratio_inv_mat); // 计算两张图的和, 也就是两张图的相似性
+        cv::divide(matrix_ratio_mat, matrix_ratio_inv_mat, saliency_matrix_mat); // 计算两张图的比值, 也就是两张图的差异性除以相似性
         saliency_matrix_mat.convertTo(image_8u_mat, CV_8UC1, 255.0);
 
         // Low-pass filter

@@ -1,105 +1,69 @@
-## 🚀 Solution Overview (Pre-Sales View)
+# GPU-Based Scene Flow with DeGraF, RAFT, and InterpoNet
 
-### TL;DR
-A **GPU-accelerated optical / scene flow pipeline** for **robotics and autonomous driving perception**, demonstrating **strong accuracy gains with a clear path toward real-time deployment**.
+This repository implements a **GPU-accelerated sparse-to-dense scene flow pipeline** built on **Dense Gradient-based Features (DeGraF)**.  
+The pipeline combines:
 
-- **Optical Flow (KITTI 2015):** EPE **8.61 → 2.64** (↓ **69%**), Fl-all **32.39% → 28.98%**
-- **Scene Flow (KITTI 2015):** EPE3D **0.3832 m → 0.1602 m** (↓ **58%**), AccS **75.38% → 79.08%**, AccR **82.14% → 86.68%**
-- **Deployment insight:** current end-to-end runtime bottleneck is mainly **system integration overhead (I/O / cross-container
-- **Hardware**（*GTX 1080 Ti, CUDA 12.7*）
-- communication)** rather than algorithmic complexity (thesis evaluation).
+- **CUDA DeGraF detector** for uniform feature extraction  
+- **RAFT** for dense optical flow estimation  
+- **InterpoNet** for learned edge-preserving interpolation  
+- KITTI-compatible evaluation for both optical and scene flow  
 
-> Notes: Metrics are reported from my MSc dissertation evaluation on **KITTI 2015** with **end-to-end measurement** (not kernel-only).
+This project extends the original **DeGraF-Flow** framework (Stephenson et al., ICIP 2019) with modern GPU and deep-learning modules.
 
----
-
-### Why it matters
-Real-time perception systems are **latency-sensitive**.
-Many optical/scene flow pipelines:
-- Fail to meet **30–60 FPS** requirements
-- Are hard to deploy on **edge GPUs**
-- Trade accuracy for speed without controllable knobs
-
-This project focuses on **deployability**, not just algorithmic accuracy:
-- modular pipeline design (feature → sparse flow → interpolation)
-- measurable KPIs (accuracy, latency/FPS, stability)
-- reproducible setup for PoC delivery (Docker / scripts)
+A RealSense conveyor prototype lives under `tools/realsense/`: Mac live status uses CPU Farneback; offline scene flow uses the TensorRT path on GPU. Both share the same three-panel IDLE/MOVING UI. See `tools/realsense/README_LIVE_MAC.md`.
 
 ---
 
-### Target Use Cases
-- Autonomous driving perception pipelines
-- Robotics motion estimation & tracking
-- Temporal consistency for downstream tasks
-- Edge GPU deployment with real-time constraints
-
----
-
-### Demo & PoC Scope
-
-**Demo (30–90s)**
-1. Show baseline pipeline runtime + flow visualization  
-2. Switch to GPU-accelerated / optimized pipeline components  
-3. Compare: **runtime + flow quality (visual + error metrics)**  
-4. Show reproducibility: build/run scripts or Docker commands  
-
-**PoC (1–2 weeks)**
-- Integrated GPU flow module (or accelerated components)
-- Benchmark report (**latency / FPS / quality**) on customer-like data
-- Dockerized deployment / reproducible scripts
-- Performance tuning knobs (speed–accuracy modes)
-
-**What we need from customer**
-- Target hardware constraints (GPU model / FPS requirement / power budget)
-- Sample data (3–5 representative sequences)
-- Success criteria (latency threshold + acceptable quality)
-
----
-
-# 🚗 DeGraF Flow GPU
-
-**GPU-Based Scene Flow Recovery using Dense Gradient-based Features (DeGraF)**  
-This project implements a sparse-to-dense optical flow pipeline based on DeGraF feature points, now leveraging OpenCV’s built-in SparseRLOFOpticalFlow, with optional CUDA acceleration for future GPU support.
-
-> Based on:  
-> 📝 *Stephenson et al., DeGraF-Flow: Extending DeGraF Features for Accurate and Efficient Sparse-to-Dense Optical Flow Estimation (ICIP 2019)*  
-> 🔗 [paper link](https://breckon.org/toby/publications/papers/stephenson19degraf-flow.pdf)
-
----
-
-## 📦 Project Structure
+## Project Structure
 
 ```
 DEGRAF_FLOW_GPU/
-├── include/                # Header files
-├── src/                    # CPU implementation (.cpp)
-├── gpu/                    # CUDA modules and main
-├── data/                   # Input images + GT
-├── CMakeLists.txt          # CMake build config
-├── native_build_setup.sh   # One-click build
+├── include/                   # C++ headers
+├── src/                       # Core CPU/C++ implementation
+├── gpu/                       # CUDA modules (DeGraF detector, kernels)
+├── external/                  # Third-party models (RAFT / InterpoNet)
+│   ├── RAFT/                  # Cloned from RAFT GitHub
+│   └── InterpoNet/            # Cloned from InterpoNet GitHub
+├── tools/
+│   └── realsense/             # Live grab, record, KITTI convert, replay UI
+├── data/
+│   ├── data_scene_flow/       # KITTI 2015 dataset
+│   ├── devkit_scene_flow/     # KITTI devkit evaluation tools
+│   └── outputs/               # Flow predictions, visualizations, metrics
+├── CMakeLists.txt             # C++/CUDA build config
+└── README.md                  # Project documentation
 ```
 
 ---
 
-## 🚀 Features
+## External Dependencies
 
-- ✅ DeGraF feature point detection (CPU / planned GPU)
-- ✅ Optical flow via OpenCV’s SparseRLOFOpticalFlow
-- ✅ Sparse-to-dense interpolation with EPIC
-- ✅ KITTI-compatible evaluation
-- ✅ Easy native build with OpenCV 4.9
+### RAFT (ECCV 2020)
+- Repository: [https://github.com/princeton-vl/RAFT](https://github.com/princeton-vl/RAFT)
+- Kept for ONNX export only: `export_raft_onnx.py` and the network files under `core/` (`raft.py`, `update.py`, `extractor.py`, `corr.py`, `utils/utils.py`).
+- Inference runs from a TensorRT `.engine` inside the C++ process. Training scripts, the demo, and the old TCP server are not in this branch.
+
+### InterpoNet (CVPR 2017)
+- Repository: [https://github.com/shayzweig/InterpoNet](https://github.com/shayzweig/InterpoNet)
+- Kept for ONNX export: `export_interponet_onnx.py` and `model.py`.
+- `SrcVariational/` is still compiled into the C++ binary for the optional variational refine.
+- Inference runs from a TensorRT `.engine`. The original Python driver and TCP server are not in this branch.
 
 ---
 
-## 🛠️ Build & Run
+##  Requirements
 
-### Prerequisites
+- **C++/CUDA**
+  - CUDA ≥ 12.0  
+  - OpenCV 4.9 (built with `optflow`, `ximgproc`)  
+  - CMake ≥ 3.12, GCC ≥ 9
+- **TensorRT** (optional, required for the RAFT / InterpoNet GPU path)
+  - A prebuilt `.engine` for this GPU, or ONNX export plus `trtexec` on the target machine
+  - Python is only needed again when re-exporting ONNX (PyTorch for RAFT, TensorFlow 1 for InterpoNet)
 
-- OpenCV 4.9 (with `optflow` and `ximgproc` modules)
-- CMake ≥ 3.12
-- GCC / Clang with C++14 support
+---
 
-### 1. Build
+## Build (C++/CUDA Core)
 
 ```bash
 mkdir build && cd build
@@ -107,53 +71,123 @@ cmake ..
 make -j$(nproc)
 ```
 
-### 2. Run
-
-```bash
-./degraf_flow
-```
-
-Modify `main.cpp` if you wish to change image paths or test sequences.
+This builds the CUDA-accelerated DeGraF detector and the C++ evaluation tools.
 
 ---
 
-## 📂 Data Format
+## Dataset Setup
+
+Download the **KITTI 2015 Scene Flow dataset** and **devkit**:
+
+- KITTI 2015: [http://www.cvlibs.net/datasets/kitti/eval_scene_flow.php](http://www.cvlibs.net/datasets/kitti/eval_scene_flow.php)
+
+Place data as:
 
 ```
 data/
-├── images/
-│   ├── 000006_10.png
-│   └── 000006_11.png
-├── flow_gt/
-│   └── gt_000006_10.png
-├── outputs/
+├── data_scene_flow/
+│   ├── training/
+│   └── testing/
+├── devkit_scene_flow/
+└── outputs/
 ```
 
 ---
 
-## 📊 Output
+## Running the Pipeline
 
-- Per-frame evaluation (EPE, R2.0, runtime, etc.)
-- Visualized flow + ground truth overlays
-- Output written to `data/outputs/`
+Point `DEGRAF_RAFT_ENGINE_PATH` and `DEGRAF_INTERPONET_ENGINE_PATH` at the engines built for this GPU, or use `run_gpu_pipeline.sh`, which sets those paths. Then:
+
+```bash
+./build/degraf_flow
+```
+
+This will:
+
+- Extract DeGraF features (CUDA)
+- Run RAFT in-process with TensorRT and sample at those features
+- Densify the sparse matches with InterpoNet (EPIC if the engine fails to load)
+- Write KITTI-format outputs under `data/outputs/`
 
 ---
 
-## 📚 References
+## Evaluation
 
-- I. Katramados & T. Breckon, *DeGraF: Dense Gradient-based Features*, ICIP 2016  
-- F. Stephenson et al., *DeGraF-Flow: Sparse-to-Dense Optical Flow Estimation*, ICIP 2019
+We use the official **KITTI devkit_scene_flow** for evaluation.
+
+```bash
+cd data/devkit_scene_flow
+make
+./evaluate_scene_flow ../outputs/ results.txt
+```
+
+Outputs include:
+
+- Optical flow metrics: **Fl-bg, Fl-fg, Fl-all**
+- Scene flow metrics: **EPE3D, AccS, AccR, Outlier %**
+- Visualization: flow/error maps (PNG)
 
 ---
 
-## 📃 License
+## References
+
+- F. Stephenson, T. Breckon, I. Katramados,
+  *DeGraF-Flow: Extending DeGraF Features for Accurate and Efficient Sparse-to-Dense Optical Flow Estimation*, ICIP 2019.
+- Z. Teed, J. Deng,
+  *RAFT: Recurrent All-Pairs Field Transforms for Optical Flow*, ECCV 2020.
+- S. Zweig, L. Wolf,
+  *InterpoNet: A Brain Inspired Neural Network for Optical Flow Dense Interpolation*, CVPR 2017.
+- M. Menze, A. Geiger,
+  *Object Scene Flow for Autonomous Vehicles*, CVPR 2015.
+
+---
+
+## License
 
 Academic and research use only.
 
 ---
 
-## 🙋 Author
+## Author
 
-- 💻 Adapted and extended by: *Gang Wang*
-- 🏫 Durham University, 2025
+- Gang Wang
+- Durham University, 2025
 
+```mermaid
+flowchart LR
+    K["KITTI images + GT"]
+
+    %% 推理 pipeline
+    subgraph pipeline["Scene-flow pipeline (C++ & CUDA)"]
+        D["CUDA DeGraF<br/>degraf_detector.cu"]
+        R["RaftEngineTRT"]
+        I["InterpoNetEngineTRT"]
+        F["FeatureMatcher.cpp<br/>predicted optical flow"]
+        S["SceneFlowReconstructor.cpp<br/>predicted scene flow"]
+    end
+
+    %% 评估模块
+    subgraph eval["Evaluation"]
+        EvalOF["EvaluateOptFlow.cpp"]
+        EvalSF["EvaluateSceneFlow.cpp"]
+    end
+
+    main["main.cpp<br/>orchestrator"]
+
+    %% data flow 只保留核心数据流
+    K --> D
+    D --> R
+    R --> I
+    I --> F
+    F --> S
+
+    %% evaluation 使用 KITTI GT + 预测结果
+    F --> EvalOF
+    S --> EvalSF
+    K --> EvalOF
+    K --> EvalSF
+
+    %% main 只连到两个子系统，减少电线
+    main --> pipeline
+    main --> eval
+ ```

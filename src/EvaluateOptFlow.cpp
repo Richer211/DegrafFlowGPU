@@ -6,11 +6,38 @@
 
 #include "EvaluateOptFlow.h"
 #include "FeatureMatcher.h"
+#include <cstdlib>
+#include <fstream>
 
 using namespace std;
 using namespace cv;
 using namespace cv::optflow;
 using namespace std;
+
+static String getDataSceneFlowRoot() // 获取数据集根目录
+{
+    const char *env_path = std::getenv("DEGRAF_DATA_PATH"); // 获取环境变量DEGRAF_DATA_PATH的值
+    if (env_path && std::string(env_path).size() > 0) // 如果环境变量DEGRAF_DATA_PATH的值不为空且长度大于0
+        return String(env_path); // 将环境变量DEGRAF_DATA_PATH的值转换为String类型，并返回
+    return String("/root/autodl-tmp/data/kitti/data_scene_flow"); // 如果环境变量DEGRAF_DATA_PATH的值为空或长度为0，则返回默认值"/root/autodl-tmp/data/kitti/data_scene_flow"
+}
+
+static std::string getKittiProtocol()
+{
+    const char *env_protocol = std::getenv("DEGRAF_KITTI_PROTOCOL");
+    if (!env_protocol)
+        return "occ";
+    std::string protocol(env_protocol);
+    if (protocol == "noc")
+        return "noc";
+    return "occ";
+}
+
+static bool fileExists(const std::string &path)
+{
+    std::ifstream f(path.c_str());
+    return f.good();
+}
 
 EvaluateOptFlow::EvaluateOptFlow()
 {
@@ -218,6 +245,14 @@ static float stat_AX(Mat hist, int cutoff_count, float max_value)
 	return (float)bin / bin_count * max_value;
 }
 
+static void computeOfficialFlMetrics(
+	const Mat &pred_flow,
+	const Mat &gt_flow,
+	const Mat &obj_map,
+	float &fl_bg,
+	float &fl_fg,
+	float &fl_all);
+
 void EvaluateOptFlow::calculateStats(Mat errors, Mat mask = Mat(), bool display_images = false)
 {
 	float R_thresholds[] = {0.5f, 1.f, 2.f, 3.f, 5.f, 10.f};
@@ -382,323 +417,632 @@ static Mat errorHeatMap(const Mat_<Point2f> &flow, Mat mask)
 	return norm;
 }
 
-// Runs an evalution for a given optical flow method
-// N.B need to take care in specifying Middlebury/KITTI file locations as well as data_set tag within the funciton
-/*!
-\param method a string corresponding to an optical flow method
-\param display bool to specify if output images should be shown
-\param image_no specifies the KITTI or middlebury image number
-\return error heat map from blue (low error) to red (high error)
-*/
-int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image_no)
+
+// Unified batch/single frame evaluation interface
+std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method, bool display_images, const std::vector<int> &image_indices)
 {
-	//////////////////// **** CHANGE THE IMAGE PAIR AND GROUND TRUTH FILE LOCATIONs HERE **** ////////////////////////////////
-	String data_set = "kitti"; // or "middlebury";
-
-	// Convert image_num into string
-	String num = to_string(image_no);
-	if (image_no < 10)
-	{
-		num = "00" + num;
-	}
-	else if (image_no < 100)
-	{
-		num = "0" + num;
-	}
-
-	num = "006"; // set to evaluate just a single image pair
-
-	// Middlebury Image names
-	vector<String> image_names = {{"Venus"}, {"RubberWhale"}, {"Grove2"}, {"Grove3"}, {"Urban2"}, {"Urban3"}, {"Hydrangea"}};
-
-	vector<String> image_names_eval = {{"Army"}, {"Backyard"}, {"Basketball"}, {"Dumptruck"}, {"Evergreen"}, {"Grove"}, {"Mequon"}, {"Schefflera"}, {"Teddy"}, {"Urban"}, {"Wooden"}, {"Yosemite"}};
-
-	// Middlebury path names (indexed by image_num)
-	// String i1_path = "C:/Users/felix/OneDrive/Documents/Uni/Year 4/project/evaluation/Middlebury/other-data/" + image_names[image_no] + "/frame10.png";
-	// String i2_path = "C:/Users/felix/OneDrive/Documents/Uni/Year 4/project/evaluation/Middlebury/other-data/" + image_names[image_no] + "/frame11.png";
-	// String groundtruth_path = "C:/Users/felix/OneDrive/Documents/Uni/Year 4/project/evaluation/Middlebury/other-gt-flow/" + image_names[image_no] + "/flow10.flo";
-
-	// KITTI 2015 train (indexed by image_num)
-	/*String i1_path = "C:/Users/felix/OneDrive/Documents/Uni/Year 4/project/evaluation/data_scene_flow/training/image_2/000" + num + "_10.png";
-	String i2_path = "C:/Users/felix/OneDrive/Documents/Uni/Year 4/project/evaluation/data_scene_flow/training/image_2/000" + num + "_11.png";
-	String groundtruth_path = "C:/Users/felix/OneDrive/Documents/Uni/Year 4/project/evaluation/data_scene_flow/training/flow_noc/000" + num + "_10.png";*/
-
-	//// KITTI 2012 train (indexed by image_num)
-	String i1_path = "../data/images/000" + num + "_10.png";
-	String i2_path = "../data/images/000" + num + "_11.png";
-	String groundtruth_path = "../data/flow_gt/gt_000" + num + "_10.png";
-	std::cout << "i1_path: " << i1_path << std::endl;
-	std::cout << "i2_path: " << i2_path << std::endl;
-	std::cout << "gt_path: " << groundtruth_path << std::endl;
-
-	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-	String error_measure = "endpoint";
-	String region = "all";
-
-	// Initialise vectors of points to display the sparse vector field if display)images is true
-	// and either degraf_flow method is being used
-	vector<Point2f> points1;
-	vector<Point2f> points2;
-
-	stats_vector.push_back(image_no);
-	Mat im1, im2; // to keeep for display
-	Mat i1, i2;
-	Mat_<Point2f> flow, ground_truth;
-	Mat computed_errors;
-	i1 = imread(i1_path, 1);
-	i2 = imread(i2_path, 1);
-	im1 = i1;
-	im2 = i2;
+    std::vector<OptFlowMetrics> results;
     
-	if (!i1.data || !i2.data || i1.empty() || i2.empty())
-	{
-		printf("No image data \n");
-		return -1;
-	}
-	if (i1.size() != i2.size() || i1.channels() != i2.channels())
-	{
-		printf("Dimension mismatch between input images\n");
-		return -1;
-	}
-	// 8-bit images expected by all algorithms
-	if (i1.depth() != CV_8U)
-		cout << "convert";
-	i1.convertTo(i1, CV_8U);
-	if (i2.depth() != CV_8U)
-		i2.convertTo(i2, CV_8U);
-	if ((method == "farneback" || method == "tvl1" || method == "deepflow" || method == "DISflow_ultrafast" || method == "DISflow_fast" || method == "DISflow_medium") && i1.channels() == 3)
-	{ // 1-channel images are expected
-		cvtColor(i1, i1, COLOR_BGR2GRAY);
-		cvtColor(i2, i2, COLOR_BGR2GRAY);
-	}
-	else if (method == "simpleflow" && i1.channels() == 1)
-	{ // 3-channel images expected
-		cvtColor(i1, i1, COLOR_GRAY2BGR);
-		cvtColor(i2, i2, COLOR_GRAY2BGR);
-	}
+    // Determine whether batch processing is supported
+    bool is_batch_capable = (method == "degraf_flow_interponet");
+    
+    // =====================================================
+    // Step 1: Data Preparation
+    // =====================================================
+    struct ImagePairData {//定义一个结构体，用于存储图像对数据
+        Mat i1, i2; // 存储第一张和第二张图像
+        String i1_path, i2_path, groundtruth_path; // 存储第一张和第二张图像的路径，以及地面truth路径
+        String num_str; // 存储图像编号
+        int image_no; // 存储图像索引
+    };
+    
+    std::vector<ImagePairData> batch_data; // 存储图像对数据
+    batch_data.reserve(image_indices.size()); // 预留空间，避免频繁扩容
+    
+    // load all data
+    for (int image_no : image_indices) { // image_indices表示要处理的图像索引列表, for循环遍历每个图像索引
+        ImagePairData data; // 创建一个ImagePairData对象，用于存储图像对数据
+        data.image_no = image_no; // 设置图像索引
+        
+        char num[7]; // 创建一个字符数组，用于存储图像编号
+        sprintf(num, "%06d", image_no); // 将图像索引转换为字符串，并存储到num中
+        data.num_str = String(num); // 将num转换为String类型，并存储到data.num_str中
+        
+        String data_root = getDataSceneFlowRoot(); // 获取数据集根目录
+        String base_dir = data_root + "/training/";
+        data.i1_path = base_dir + "image_2/" + data.num_str + "_10.png";
+        data.i2_path = base_dir + "image_2/" + data.num_str + "_11.png";
+        const std::string protocol = getKittiProtocol();
+        const std::string flow_pref = std::string("flow_") + protocol + "/" + std::string(data.num_str) + "_10.png";
+        const std::string flow_alt = std::string("flow_") + (protocol == "occ" ? "noc" : "occ") + "/" + std::string(data.num_str) + "_10.png";
+        std::string flow_path = std::string(base_dir) + flow_pref;
+        if (!fileExists(flow_path))
+            flow_path = std::string(base_dir) + flow_alt;
+        data.groundtruth_path = flow_path;
+        
 
-	// flow = Mat(i1.size[0], i1.size[1], CV_32FC2);
-	// flow = Mat::zeros(i1.size(), CV_32FC2);
-	Ptr<DenseOpticalFlow> algorithm;
+        data.i1 = imread(data.i1_path, 1); // 读取第一张图像
+        data.i2 = imread(data.i2_path, 1); // 读取第二张图像
+        
+        if (!data.i1.data || !data.i2.data || data.i1.empty() || data.i2.empty()) {
+            printf("No image data \n");
+            continue;
+        }
+        if (data.i1.size() != data.i2.size() || data.i1.channels() != data.i2.channels()) {
+            printf("Dimension mismatch between input images\n");
+            continue;
+        }
+        
 
-	if (method == "farneback")
-		algorithm = cv::optflow::createOptFlow_Farneback();
-	else if (method == "simpleflow")
-		algorithm = cv::optflow::createOptFlow_SimpleFlow();
-	else if (method == "tvl1")
-		algorithm = cv::optflow::createOptFlow_DualTVL1();
-	else if (method == "deepflow")
-		algorithm = cv::optflow::createOptFlow_DeepFlow();
-	else if (method == "sparsetodenseflow")
-		algorithm = cv::optflow::createOptFlow_SparseToDense();
-	else if (method == "pcaflow")
-	{
-		// FS removed prior option
-		algorithm = cv::optflow::createOptFlow_PCAFlow();
-	}
-	else if (method == "DISflow_ultrafast")
-		algorithm = cv::DISOpticalFlow::create(cv::DISOpticalFlow::PRESET_ULTRAFAST);
-	// cv::Ptr<cv::optflow::DISOpticalFlow> algorithm = cv::optflow::createOptFlow_DIS(0);
-	else if (method == "DISflow_fast")
-		algorithm = cv::DISOpticalFlow::create(cv::DISOpticalFlow::PRESET_FAST);
-	else if (method == "DISflow_medium")
-		algorithm = cv::DISOpticalFlow::create(cv::DISOpticalFlow::PRESET_MEDIUM);
-	else if (method == "degraf_flow_lk")
-	{
-	}
-	else if (method == "degraf_flow_rlof")
-	{
-	}
-	else
-	{
-		printf("Wrong method!\n");
-		return -1;
-	}
+        if (data.i1.depth() != CV_8U) data.i1.convertTo(data.i1, CV_8U);
+        if (data.i2.depth() != CV_8U) data.i2.convertTo(data.i2, CV_8U);
+        
+        batch_data.push_back(data);
+    }
+    
+    if (batch_data.empty()) {
+        return results;
+    }
+    
+    // =====================================================
+    // Step 2: Optical flow calculation (batch or frame by frame)
+    // =====================================================
+    std::vector<Mat> batch_flows;
+    std::vector<double> individual_times;
+    std::vector<vector<Point2f>> batch_points1, batch_points2; 
+    
+    if (is_batch_capable && batch_data.size() > 1) {
+        // Batch processing: degraf_flow_interponet
+        std::vector<Mat> batch_i1, batch_i2;
+        std::vector<String> batch_num_strs;
+        
+        for (const auto& data : batch_data) {
+            batch_i1.push_back(data.i1);
+            batch_i2.push_back(data.i2);
+            batch_num_strs.push_back(data.num_str);
+        }
+        
+        double batch_start = getTickCount();
+        FeatureMatcher matcher;
+        
+        // Call the batch version
+        std::vector<std::vector<Point2f>> batch_points, batch_dst_points;
+        batch_flows = matcher.degraf_flow_InterpoNet(
+            batch_i1, batch_i2, batch_num_strs,
+            display_images ? &batch_points : nullptr,
+            display_images ? &batch_dst_points : nullptr
+        );
+        
+        double total_time_ms = (getTickCount() - batch_start) / getTickFrequency() * 1000.0;
+        
+        // Evenly distribute time
+        for (size_t i = 0; i < batch_flows.size(); ++i) {
+            individual_times.push_back(total_time_ms / batch_flows.size());
+        }
+        
+        //Store feature points for visualization
+        if (display_images && !batch_points.empty()) {
+            batch_points1 = batch_points;
+            batch_points2 = batch_dst_points;
+        }
+        
+    } else {
+        // Frame-by-frame processing: all other methods
+        batch_flows.resize(batch_data.size());
+        individual_times.resize(batch_data.size());
+        batch_points1.resize(batch_data.size());
+        batch_points2.resize(batch_data.size());
+        
+        for (size_t i = 0; i < batch_data.size(); ++i) {
+            const auto& data = batch_data[i];
+            Mat flow;
+            Mat i1 = data.i1, i2 = data.i2;
+            
+            // Image preprocessing
+            if ((method == "farneback" || method == "tvl1" || method == "deepflow" || 
+                 method == "DISflow_ultrafast" || method == "DISflow_fast" || method == "DISflow_medium") 
+                 && i1.channels() == 3) {
+                cvtColor(i1, i1, COLOR_BGR2GRAY);
+                cvtColor(i2, i2, COLOR_BGR2GRAY);
+            }
+            else if (method == "simpleflow" && i1.channels() == 1) {
+                cvtColor(i1, i1, COLOR_GRAY2BGR);
+                cvtColor(i2, i2, COLOR_GRAY2BGR);
+            }
+            
+            double startTick = getTickCount();
+            
+            Ptr<DenseOpticalFlow> algorithm;
+            
+            if (method == "farneback")
+                algorithm = cv::optflow::createOptFlow_Farneback();
+            else if (method == "simpleflow")
+                algorithm = cv::optflow::createOptFlow_SimpleFlow();
+            else if (method == "tvl1")
+                algorithm = cv::optflow::createOptFlow_DualTVL1();
+            else if (method == "deepflow")
+                algorithm = cv::optflow::createOptFlow_DeepFlow();
+            else if (method == "sparsetodenseflow")
+                algorithm = cv::optflow::createOptFlow_SparseToDense();
+            else if (method == "pcaflow")
+                algorithm = cv::optflow::createOptFlow_PCAFlow();
+            else if (method == "DISflow_ultrafast")
+                algorithm = DISOpticalFlow::create(DISOpticalFlow::PRESET_ULTRAFAST);
+            else if (method == "DISflow_fast")
+                algorithm = DISOpticalFlow::create(DISOpticalFlow::PRESET_FAST);
+            else if (method == "DISflow_medium")
+                algorithm = DISOpticalFlow::create(DISOpticalFlow::PRESET_MEDIUM);
+            else if (method == "degraf_flow_lk") {
+                FeatureMatcher algo;
+                algo.degraf_flow_LK(data.i1, data.i2, flow, 60, (0.05000000075F), true, (500.0F), (1.5F), data.num_str);
+                if (display_images) {
+                    batch_points1[i] = algo.points_filtered;
+                    batch_points2[i] = algo.dst_points_filtered;
+                }
+            }
+            else if (method == "degraf_flow_rlof") {
+                FeatureMatcher algo;
+                algo.degraf_flow_RLOF(data.i1, data.i2, flow, 127, (0.05000000075F), true, (500.0F), (1.5F), data.num_str);
+                if (display_images) {
+                    batch_points1[i] = algo.points_filtered;
+                    batch_points2[i] = algo.dst_points_filtered;
+                }
+            }
+            else if (method == "degraf_flow_interponet") {
+                // Single frame InterpoNet redirects to RLOF
+                FeatureMatcher algo;
+                algo.degraf_flow_RLOF(data.i1, data.i2, flow, 127, (0.05000000075F), true, (500.0F), (1.5F), data.num_str);
+                if (display_images) {
+                    batch_points1[i] = algo.points_filtered;
+                    batch_points2[i] = algo.dst_points_filtered;
+                }
+            }
+            else {
+                printf("Wrong method!\n");
+                continue;
+            }
+            
+            if (algorithm.get()) {
+                algorithm->calc(i1, i2, flow);
+            }
+            
+            double time = ((double)getTickCount() - startTick) / getTickFrequency();
+            
+            batch_flows[i] = flow;
+            individual_times[i] = time * 1000.0; 
+        }
+    }
+    
+    // =====================================================
+    // Step 3: Evaluate the calculation
+    // =====================================================
+    for (size_t i = 0; i < batch_data.size(); ++i) {
+        const auto& data = batch_data[i];
+        const Mat& flow = batch_flows[i];
+        
+        if (flow.empty()) {
+            printf("Optical flow calculation failed for %06d\n", data.image_no);
+            continue;
+        }
+        
+        OptFlowMetrics metrics;
+        metrics.image_no = data.image_no;
+        metrics.time_ms = individual_times[i];
 
-	double startTick, time;
-	startTick = (double)getTickCount(); // measure time
-
-	if (method == "degraf_flow_lk")
-	{
-		FeatureMatcher algorithm = FeatureMatcher();
-		algorithm.degraf_flow_LK(i1, i2, flow, 60, (0.05000000075F), true, (500.0F), (1.5F));
-
-		if (display_images)
-		{
-			// Points for displaying sparse flow field
-			points1 = algorithm.points_filtered;
-			points2 = algorithm.dst_points_filtered;
-		}
-	}
-	else if (method == "degraf_flow_rlof")
-	{
-		FeatureMatcher algorithm = FeatureMatcher();
-		algorithm.degraf_flow_RLOF(i1, i2, flow, 127, (0.05000000075F), true, (500.0F), (1.5F));
+		Mat kittiFlow = convertToKittiFlow(flow);
+		String output_path = "../data/outputs/"+ method+ "/" + data.num_str + "_10.png";
+		imwrite(output_path, kittiFlow);
+		printf("Saved KITTI flow to: %s\n", output_path.c_str());
 		
-		if (display_images)
-		{
-			// Points for displaying sparse flow field
-			points1 = algorithm.points_filtered;
-			points2 = algorithm.dst_points_filtered;
-		}
-	}
-	else
-	{
-		algorithm->calc(i1, i2, flow);
-	}
+        
+        if (!data.groundtruth_path.empty()) {
+            Mat ground_truth = readKittiGroundTruth(data.groundtruth_path);
+            
+            if (!ground_truth.empty() && 
+                flow.size() == ground_truth.size() && 
+                flow.channels() == 2 && ground_truth.channels() == 2) {
+                
+                String error_measure = "endpoint";
+                String region = "all";
+                
+                // Error calculation
+                Mat computed_errors;
+                if (error_measure == "endpoint")
+                    computed_errors = endpointError(flow, ground_truth);
+                else if (error_measure == "angular")
+                    computed_errors = angularError(flow, ground_truth);
+                
+                // mask region
+                Mat mask;
+                if (region == "all")
+                    mask = Mat::ones(ground_truth.size(), CV_8U) * 255;
+                else if (region == "discontinuities")
+                {
+                    Mat truth_merged, grad_x, grad_y, gradient;
+                    vector<Mat> truth_split;
+                    split(ground_truth, truth_split);
+                    truth_merged = truth_split[0] + truth_split[1];
 
-	time = ((double)getTickCount() - startTick) / getTickFrequency();
-	printf("\nTime [s]: %.3f\n", time);
+                    Sobel(truth_merged, grad_x, CV_16S, 1, 0, -1, 1, 0, BORDER_REPLICATE);
+                    grad_x = abs(grad_x);
+                    Sobel(truth_merged, grad_y, CV_16S, 0, 1, 1, 1, 0, BORDER_REPLICATE);
+                    grad_y = abs(grad_y);
+                    addWeighted(grad_x, 0.5, grad_y, 0.5, 0, gradient); // approximation!
 
-	if (!groundtruth_path.empty())
-	{ // compare to ground truth
-		if (data_set == "middlebury")
-		{
-			ground_truth = cv::readOpticalFlow(groundtruth_path); // Middlebury
-		}
-		else
-		{
-			ground_truth = readKittiGroundTruth(groundtruth_path); // KITTI
-		}
+                    Scalar s_mean;
+                    s_mean = mean(gradient);
+                    double threshold = s_mean[0]; // threshold value arbitrary
+                    mask = gradient > threshold;
+                    dilate(mask, mask, Mat::ones(9, 9, CV_8U));
+                }
+                else if (region == "untextured")
+                {
+                    Mat i1_grayscale, grad_x, grad_y, gradient;
+                    if (data.i1.channels() == 3)
+                        cvtColor(data.i1, i1_grayscale, COLOR_BGR2GRAY);
+                    else
+                        i1_grayscale = data.i1;
+                    Sobel(i1_grayscale, grad_x, CV_16S, 1, 0, 7);
+                    grad_x = abs(grad_x);
+                    Sobel(i1_grayscale, grad_y, CV_16S, 0, 1, 7);
+                    grad_y = abs(grad_y);
+                    addWeighted(grad_x, 0.5, grad_y, 0.5, 0, gradient); // approximation!
+                    GaussianBlur(gradient, gradient, Size(5, 5), 1, 1);
 
-		if (flow.size() != ground_truth.size() || flow.channels() != 2 || ground_truth.channels() != 2)
-		{
-			printf("Dimension mismatch between the computed flow and the provided ground truth\n");
-			return -1;
-		}
-		if (error_measure == "endpoint")
-			computed_errors = endpointError(flow, ground_truth);
-		else if (error_measure == "angular")
-			computed_errors = angularError(flow, ground_truth);
-		else
-		{
-			printf("Invalid error measure! Available options: endpoint, angular\n");
-			return -1;
-		}
+                    Scalar s_mean;
+                    s_mean = mean(gradient);
+                    // arbitrary threshold value used - could be determined statistically from the image?
+                    double threshold = 1000;
+                    mask = gradient < threshold;
+                    dilate(mask, mask, Mat::ones(3, 3, CV_8U));
+                }
+                else
+                {
+                    printf("Invalid region selected! Available options: all, discontinuities, untextured");
+                    continue;
+                }
+                
+                // masking out NaNs and incorrect GT values 
+                Mat truth_split[2];
+                split(ground_truth, truth_split);
+                Mat abs_mask = Mat((abs(truth_split[0]) < 1e9) & (abs(truth_split[1]) < 1e9));
+                Mat nan_mask = Mat((truth_split[0] == truth_split[0]) & (truth_split[1] == truth_split[1]));
+                bitwise_and(abs_mask, nan_mask, nan_mask);
+                bitwise_and(nan_mask, mask, mask);
+                
+                // Calculate statistical indicators
+                printf("Using %s error measure\n", error_measure.c_str());
+                calculateStats(computed_errors, mask, display_images);
+                
+                // At the same time, extract indicators to the metrics structure
+                calculateStatsForMetrics(computed_errors, mask, metrics);
 
-		Mat mask;
-		if (region == "all")
-			mask = Mat::ones(ground_truth.size(), CV_8U) * 255;
-		else if (region == "discontinuities")
-		{
-			Mat truth_merged, grad_x, grad_y, gradient;
-			vector<Mat> truth_split;
-			split(ground_truth, truth_split);
-			truth_merged = truth_split[0] + truth_split[1];
+                // Official KITTI Fl (training local): same formula as devkit_scene_flow.
+                String obj_map_path = getDataSceneFlowRoot() + "/training/obj_map/" + data.num_str + "_10.png";
+                Mat obj_map = imread(obj_map_path, cv::IMREAD_UNCHANGED);
+                if (obj_map.empty())
+                {
+                    printf("[WARN] Missing obj_map for Fl metrics: %s\n", obj_map_path.c_str());
+                }
+                computeOfficialFlMetrics(flow, ground_truth, obj_map,
+                                         metrics.Fl_bg, metrics.Fl_fg, metrics.Fl_all);
+                printf("Official Fl-bg: %.2f%% | Fl-fg: %.2f%% | Fl-all: %.2f%%\n",
+                       metrics.Fl_bg, metrics.Fl_fg, metrics.Fl_all);
+                
 
-			Sobel(truth_merged, grad_x, CV_16S, 1, 0, -1, 1, 0, BORDER_REPLICATE);
-			grad_x = abs(grad_x);
-			Sobel(truth_merged, grad_y, CV_16S, 0, 1, 1, 1, 0, BORDER_REPLICATE);
-			grad_y = abs(grad_y);
-			addWeighted(grad_x, 0.5, grad_y, 0.5, 0, gradient); // approximation!
+                if (display_images) {
+                    Mat im1 = data.i1, im2 = data.i2;
+                    vector<Point2f> points1, points2;
+                    if (i < batch_points1.size()) {
+                        points1 = batch_points1[i];
+                        points2 = batch_points2[i];
+                    }
+                    
+                    Mat difference = ground_truth - flow;
+                    Mat masked_difference;
+                    difference.copyTo(masked_difference, mask);
+                    Mat error = flowToDisplay(masked_difference);
+                    Mat heatmap = errorHeatMap(difference, mask);
+                    Mat ground = flowToDisplay(ground_truth);
+                    Mat flow_image = flowToDisplay(flow);
 
-			Scalar s_mean;
-			s_mean = mean(gradient);
-			double threshold = s_mean[0]; // threshold value arbitrary
-			mask = gradient > threshold;
-			dilate(mask, mask, Mat::ones(9, 9, CV_8U));
-		}
-		else if (region == "untextured")
-		{
-			Mat i1_grayscale, grad_x, grad_y, gradient;
-			if (i1.channels() == 3)
-				cvtColor(i1, i1_grayscale, COLOR_BGR2GRAY);
-			else
-				i1_grayscale = i1;
-			Sobel(i1_grayscale, grad_x, CV_16S, 1, 0, 7);
-			grad_x = abs(grad_x);
-			Sobel(i1_grayscale, grad_y, CV_16S, 0, 1, 7);
-			grad_y = abs(grad_y);
-			addWeighted(grad_x, 0.5, grad_y, 0.5, 0, gradient); // approximation!
-			GaussianBlur(gradient, gradient, Size(5, 5), 1, 1);
+                    // Display all useful output images in one frame 
+                    Mat win_mat(Size(data.i1.cols * 2, data.i1.rows * 3), CV_8UC3);
 
-			Scalar s_mean;
-			s_mean = mean(gradient);
-			// arbitrary threshold value used - could be determined statistically from the image?
-			double threshold = 1000;
-			mask = gradient < threshold;
-			dilate(mask, mask, Mat::ones(3, 3, CV_8U));
-		}
+                    imwrite("../data/outputs/010_01.png", data.i1); // 保存第一张图像
+                    imwrite("../data/outputs/010_11.png", data.i2); // 保存第二张图像
+                    
+					// Generate DeGraF feature points visualization 
+					if (method == "degraf_flow_lk" || method == "degraf_flow_rlof" || method == "degraf_flow_interponet") {
+						Mat feature_points;
+						data.i1.copyTo(feature_points); 
+						
+						// Draw detected feature points (points1) as small circles
+						for (int i = 0; i < points1.size(); i++) {
+							Scalar color = Scalar(255, 255, 255);				
+							Mat overlay;
+							feature_points.copyTo(overlay);
+							circle(overlay, points1[i], 2, color, -1, cv::LINE_AA, 0);
+							addWeighted(feature_points, 0.3, overlay, 0.7, 0, feature_points);
+							
+						}
+						
+						// Save feature points visualization
+						imwrite("../data/outputs/feature_points.png", feature_points);
+						cout << "Detected " << points1.size() << " DeGraF feature points" << endl;
+					}
+                    // Draw sparse flow field from degraf flow
+                    if (method == "degraf_flow_lk" || method == "degraf_flow_rlof" || method == "degraf_flow_interponet") {
+                        // Read RAFT dense optical flow as background
+						Mat raft_background = imread("../data/outputs/000010_raft_flow.png", IMREAD_COLOR);
+						Mat sparse;
+						
+						if (!raft_background.empty()) {
+							// If the size does not match, resize to the original image size
+							if (raft_background.size() != data.i1.size()) {
+								resize(raft_background, raft_background, data.i1.size());
+								cout << "Resized RAFT background to match original image" << endl;
+							}
+							raft_background.copyTo(sparse);
+							cout << "Using RAFT background successfully" << endl;
+						} else {
+							cout << "RAFT background not found, using fallback" << endl;
+							data.i2.copyTo(sparse);
+						}
 
-		else
-		{
-			printf("Invalid region selected! Available options: all, discontinuities, untextured");
-			return -1;
-		}
+						for (int j = 0; j < points1.size(); j += 4) {
+							Mat overlay;
+							sparse.copyTo(overlay);
+							
+							arrowedLine(overlay, points1[j], points2[j], Scalar(255, 255, 255), 2, 8, 0, 0.2);
+							addWeighted(sparse, 0.3, overlay, 0.7, 0, sparse);
+						}
+						
+						imwrite("../data/outputs/sparse.png", sparse);
+						sparse.copyTo(win_mat(Rect(0, data.i1.rows, data.i1.cols, data.i1.rows)));
+                    }
+                    else {
+                        Mat placeholder = Mat::zeros(data.i1.rows, data.i1.cols, CV_8UC3);
+                        bitwise_not(placeholder, placeholder);
+                        line(placeholder, Point2f(0, 0), Point2f(data.i1.cols, data.i1.rows), Scalar(0, 0, 0), 2, 8);
+                        line(placeholder, Point2f(data.i1.cols, 0), Point2f(0, data.i1.rows), Scalar(0, 0, 0), 2, 8);
+                        placeholder.copyTo(win_mat(Rect(0, data.i1.rows, data.i1.cols, data.i1.rows)));
+                    }
+                    
+                    imwrite("../data/outputs/error.png", error);
+                    imwrite("../data/outputs/heatmap.png", heatmap);
+                    imwrite("../data/outputs/ground.png", ground);
+                    imwrite("../data/outputs/flow.png", flow_image);
+                    im1.copyTo(win_mat(Rect(0, 0, data.i1.cols, data.i1.rows)));
+                    im2.copyTo(win_mat(Rect(data.i1.cols, 0, data.i1.cols, data.i1.rows)));
+                    flow_image.copyTo(win_mat(Rect(data.i1.cols, data.i1.rows, data.i1.cols, data.i1.rows)));
+                    ground.copyTo(win_mat(Rect(0, data.i1.rows * 2, data.i1.cols, data.i1.rows)));
+                    heatmap.copyTo(win_mat(Rect(data.i1.cols, data.i1.rows * 2, data.i1.cols, data.i1.rows)));
 
-		// masking out NaNs and incorrect GT values
-		Mat truth_split[2];
-		split(ground_truth, truth_split);
-		Mat abs_mask = Mat((abs(truth_split[0]) < 1e9) & (abs(truth_split[1]) < 1e9));
-		Mat nan_mask = Mat((truth_split[0] == truth_split[0]) & (truth_split[1] == truth_split[1]));
-		bitwise_and(abs_mask, nan_mask, nan_mask);
-		bitwise_and(nan_mask, mask, mask); // including the selected region
+                    // Shrink to fit all image on the screen
+                    resize(win_mat, win_mat, Size(1325, 600));
+                    imshow("Results", win_mat);
+                    
+                    printf("Using %s error measure\n", error_measure.c_str());
+                    calculateStats(computed_errors, mask, display_images);
 
-		if (display_images)
-		{
-			Mat difference = ground_truth - flow;
-			Mat masked_difference;
-			difference.copyTo(masked_difference, mask);
-			Mat error = flowToDisplay(masked_difference);
-			Mat heatmap = errorHeatMap(difference, mask);
-			Mat ground = flowToDisplay(ground_truth);
-			Mat flow_image = flowToDisplay(flow);
+                    if (display_images)
+                        waitKey(0);
+                }
+            }
+        }
+        
+        results.push_back(metrics);
+        all_results_.push_back(metrics);
+    }
+    
+    return results;
+}
 
-			// Display all useful output images in one frame
-			cv::Mat win_mat(cv::Size(i1.cols * 2, i1.rows * 3), CV_8UC3);
 
-			imwrite("../data/outputs/06_0.png", i1);
-			imwrite("../data/outputs/06_1.png", i2);
-			// Draw sparse flow field from degraf flow
-			if (method == "degraf_flow_lk" || method == "degraf_flow_rlof")
-			{
-				Mat sparse = Mat::zeros(i1.rows, i1.cols, CV_8UC3);
-				bitwise_not(sparse, sparse);
-				for (int i = 0; i < points1.size(); i += 4)
-				{
-					cv::arrowedLine(sparse, points1[i], points2[i], cv::Scalar(0, 0, 0), 2, 8, 0, 0.2);
-				}
-				// imwrite("C:/Users/felix/OneDrive/Documents/Uni/Year 4/project/Images/output/Presentation/lines.png" , sparse);
-				imwrite("../data/outputs/sparse.png", sparse);
-				//  place in output window
-				sparse.copyTo(win_mat(cv::Rect(0, i1.rows, i1.cols, i1.rows)));
-			}
-			else
-			{
-				Mat placeholder = Mat::zeros(i1.rows, i1.cols, CV_8UC3);
-				bitwise_not(placeholder, placeholder);
-				cv::line(placeholder, Point2f(0, 0), Point2f(i1.cols, i1.rows), cv::Scalar(0, 0, 0), 2, 8);
-				cv::line(placeholder, Point2f(i1.cols, 0), Point2f(0, i1.rows), cv::Scalar(0, 0, 0), 2, 8);
-				placeholder.copyTo(win_mat(cv::Rect(0, i1.rows, i1.cols, i1.rows)));
-			}
-			imwrite("../data/outputs/error.png", error);
-			imwrite("../data/outputs/heatmap.png", heatmap);
-			imwrite("../data/outputs/ground.png", ground);
-			imwrite("../data/outputs/flow.png", flow_image);
-			im1.copyTo(win_mat(cv::Rect(0, 0, i1.cols, i1.rows)));
-			im2.copyTo(win_mat(cv::Rect(i1.cols, 0, i1.cols, i1.rows)));
-			flow_image.copyTo(win_mat(cv::Rect(i1.cols, i1.rows, i1.cols, i1.rows)));
-			ground.copyTo(win_mat(cv::Rect(0, i1.rows * 2, i1.cols, i1.rows)));
-			heatmap.copyTo(win_mat(cv::Rect(i1.cols, i1.rows * 2, i1.cols, i1.rows)));
+// Metric calculation functions extracted from calculateStats
+void EvaluateOptFlow::calculateStatsForMetrics(Mat errors, Mat mask, OptFlowMetrics& metrics) 
+{
+    float R_thresholds[] = {0.5f, 1.f, 2.f, 3.f, 5.f, 10.f};
+    
+    if (mask.empty())
+        mask = Mat::ones(errors.size(), CV_8U);
+    
+    // Calculate mean and standard deviation
+    Scalar s_mean, s_std;
+    meanStdDev(errors, s_mean, s_std, mask);
+    metrics.EPE = (float)s_mean[0];
+    metrics.std_dev = (float)s_std[0];
+    
+    // Calculate RX statistics
+    float* R_values[] = {&metrics.R05, &metrics.R1, &metrics.R2, &metrics.R3, &metrics.R5, &metrics.R10};
+    for (int i = 0; i < 6; ++i) {
+        float R = stat_RX(errors, R_thresholds[i], mask);
+        *(R_values[i]) = R * 100;
+    }
+}
 
-			// Shrink to fit all image on the screen
-			resize(win_mat, win_mat, Size(1325, 600));
-			imshow("Results", win_mat);
-		}
-		printf("Using %s error measure\n", error_measure.c_str());
-		calculateStats(computed_errors, mask, display_images);
+// KITTI official outlier (devkit_scene_flow): err > 3px AND err / |gt| > 5%.
+// obj_map: 0 = background, >0 = foreground. Percentages are in [0, 100].
+static void computeOfficialFlMetrics(
+    const Mat &pred_flow,
+    const Mat &gt_flow,
+    const Mat &obj_map,
+    float &fl_bg,
+    float &fl_fg,
+    float &fl_all)
+{
+    fl_bg = fl_fg = fl_all = 0.0f;
+    if (pred_flow.empty() || gt_flow.empty() ||
+        pred_flow.size() != gt_flow.size() ||
+        pred_flow.type() != CV_32FC2 || gt_flow.type() != CV_32FC2)
+        return;
 
-		if (display_images)
-			waitKey(0);
-	}
-	if (display_images) // wait for the user to see all the images
-		waitKey(1);
+    const float abs_thresh = 3.0f;
+    const float rel_thresh = 0.05f;
+    long n_bg = 0, n_fg = 0, err_bg = 0, err_fg = 0;
 
-	// Collect stats from evaluation
-	stats_vector.push_back(time);
-	all_stats.push_back(stats_vector);
-	stats_vector.clear();
+    for (int y = 0; y < gt_flow.rows; ++y)
+    {
+        const Vec2f *gt_row = gt_flow.ptr<Vec2f>(y);
+        const Vec2f *pr_row = pred_flow.ptr<Vec2f>(y);
+        for (int x = 0; x < gt_flow.cols; ++x)
+        {
+            const Point2f gt(gt_row[x][0], gt_row[x][1]);
+            const Point2f pr(pr_row[x][0], pr_row[x][1]);
+            if (!isFlowCorrect(gt) || !isFlowCorrect(pr))
+                continue;
 
-	return 0;
+            const float du = gt.x - pr.x;
+            const float dv = gt.y - pr.y;
+            const float dist = std::sqrt(du * du + dv * dv);
+            const float mag = std::sqrt(gt.x * gt.x + gt.y * gt.y);
+            const bool is_outlier = (dist > abs_thresh) && (dist > rel_thresh * mag);
+
+            bool is_fg = false;
+            if (!obj_map.empty() && obj_map.size() == gt_flow.size())
+            {
+                if (obj_map.type() == CV_8UC1)
+                    is_fg = obj_map.at<uchar>(y, x) > 0;
+                else if (obj_map.type() == CV_16UC1)
+                    is_fg = obj_map.at<ushort>(y, x) > 0;
+            }
+
+            if (is_fg)
+            {
+                ++n_fg;
+                if (is_outlier)
+                    ++err_fg;
+            }
+            else
+            {
+                ++n_bg;
+                if (is_outlier)
+                    ++err_bg;
+            }
+        }
+    }
+
+    const long n_all = n_bg + n_fg;
+    const long err_all = err_bg + err_fg;
+    if (n_bg > 0)
+        fl_bg = 100.0f * static_cast<float>(err_bg) / static_cast<float>(n_bg);
+    if (n_fg > 0)
+        fl_fg = 100.0f * static_cast<float>(err_fg) / static_cast<float>(n_fg);
+    if (n_all > 0)
+        fl_all = 100.0f * static_cast<float>(err_all) / static_cast<float>(n_all);
+}
+
+
+// Clear result function
+void EvaluateOptFlow::clearResults() 
+{
+    all_results_.clear();
+    all_stats.clear();
+}
+
+void EvaluateOptFlow::exportOpticalFlowTableCSV(
+    const std::string &csv_path,
+    const std::map<std::string, std::vector<OptFlowMetrics>> &method_results)
+{
+    std::ofstream file(csv_path, std::ios::trunc);
+    if (!file.is_open())
+        return;
+
+    // Project-local debug metrics (EPE + RX). Not KITTI Fl.
+    file << "Method,Average EPE,Average R2.0,Average R3.0,Average Time(ms),Average STD\n";
+
+    for (const auto &method_pair : method_results)
+    {
+        const std::string &method_name = method_pair.first;
+        const std::vector<OptFlowMetrics> &results = method_pair.second;
+        if (results.empty())
+            continue;
+
+        double avg_epe = 0.0, avg_r2 = 0.0, avg_r3 = 0.0, avg_time = 0.0, avg_std = 0.0;
+        for (const auto &m : results)
+        {
+            avg_epe += m.EPE;
+            avg_r2 += m.R2;
+            avg_r3 += m.R3;
+            avg_time += m.time_ms;
+            avg_std += m.std_dev;
+        }
+
+        const double n = static_cast<double>(results.size());
+        file << method_name << ","
+             << (avg_epe / n) << ","
+             << (avg_r2 / n) << ","
+             << (avg_r3 / n) << ","
+             << (avg_time / n) << ","
+             << (avg_std / n) << "\n";
+    }
+}
+
+void EvaluateOptFlow::exportPaperOpticalFlowTableCSV(
+    const std::string &csv_path,
+    const std::map<std::string, std::vector<OptFlowMetrics>> &method_results)
+{
+    std::ofstream file(csv_path, std::ios::trunc);
+    if (!file.is_open())
+        return;
+
+    // Paper Table I style on KITTI-2015 training (local GT available).
+    // Fl uses official outlier: error>3px AND error/|gt|>5%, split by obj_map.
+    file << "Method,EPE(px),Fl-bg(%),Fl-fg(%),Fl-all(%),Runtime(ms)\n";
+
+    for (const auto &method_pair : method_results)
+    {
+        const std::string &method_name = method_pair.first;
+        const std::vector<OptFlowMetrics> &results = method_pair.second;
+        if (results.empty())
+            continue;
+
+        double avg_epe = 0.0, avg_fl_bg = 0.0, avg_fl_fg = 0.0, avg_fl_all = 0.0, avg_time = 0.0;
+        for (const auto &m : results)
+        {
+            avg_epe += m.EPE;
+            avg_fl_bg += m.Fl_bg;
+            avg_fl_fg += m.Fl_fg;
+            avg_fl_all += m.Fl_all;
+            avg_time += m.time_ms;
+        }
+
+        const double n = static_cast<double>(results.size());
+        file << method_name << ","
+             << (avg_epe / n) << ","
+             << (avg_fl_bg / n) << ","
+             << (avg_fl_fg / n) << ","
+             << (avg_fl_all / n) << ","
+             << (avg_time / n) << "\n";
+    }
+}
+
+
+// Backwards compatible with the original runEvaluation function
+int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image_no) 
+{
+    std::vector<int> indices = {image_no};
+    std::vector<OptFlowMetrics> results = runEvaluation(method, display_images, indices);
+    
+    if (!results.empty()) {
+        OptFlowMetrics result = results[0];
+        
+        stats_vector.clear();
+        stats_vector.push_back(image_no);
+        stats_vector.push_back(result.EPE);
+        stats_vector.push_back(result.std_dev);
+        stats_vector.push_back(result.R05);
+        stats_vector.push_back(result.R1);
+        stats_vector.push_back(result.R2);
+        stats_vector.push_back(result.R3);
+        stats_vector.push_back(result.R5);
+        stats_vector.push_back(result.R10);
+        stats_vector.push_back(result.time_ms);
+        
+        all_stats.push_back(stats_vector);
+        stats_vector.clear();
+    }
+    
+    return 0;
 }

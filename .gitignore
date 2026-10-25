@@ -1,6 +1,46 @@
 build/
-external/
+build_cpu/
+build_cpu_try/
+build_gpu/
 .vscode/
+.DS_Store
+
+# Local study notes (keep on disk, do not publish)
+teaching_learning_center/
+
+# Dataset / generated data
 data/
-Dockerfile
-Dockerfile.cuda
+external/RAFT/data/
+external/InterpoNet/data/
+
+# Temporary / backup
+backup/
+share_memory/
+opencv_contrib/
+*.tgz
+*.tar
+*.zip
+
+# Keep external code, ignore model artifacts only
+external/InterpoNet/models/
+external/InterpoNet/model.yml
+external/InterpoNet/.git.bak/
+external/RAFT/models/
+external/**/checkpoints/
+external/**/weights/
+external/**/__pycache__/
+
+# Python cache
+**/__pycache__/
+*.py[cod]
+
+# ML weights / checkpoints / TensorRT engines
+*.ckpt
+*.ckpt.*
+*.pth
+*.pt
+*.onnx
+*.pb
+*.h5
+*.tflite
+*.engine

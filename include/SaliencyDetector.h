@@ -50,6 +50,7 @@ public:
   ~SaliencyDetector();
 
   // Public Function Prototypes
+  // DoGoS_Saliency 是DoG_Saliency的改进版，主要是为了提高计算效率和准确性。
   void Create(IplImage *p_image_src, uint p_pyr_levels);
   void Release(void);
   int DIVoG_Saliency(IplImage *p_image_src, IplImage *p_image_dest = NULL, int p_pyr_levels = 3, bool p_filter = false, bool p_norm = false);

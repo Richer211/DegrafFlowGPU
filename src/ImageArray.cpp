@@ -1,10 +1,4 @@
-// File description
-/*!
-  Copyright \htmlonly &copy \endhtmlonly 2008-2011 Cranfield University
-  \file ImageArray.cpp
-  \brief ImageArray class implementation
-  \author Ioannis Katramados
-*/
+
 
 // Include Files
 #include "stdafx.h"
@@ -52,7 +46,7 @@ void ImageArray::InitArray(IplImage *p_image, uint p_length)
         // Create IplImage wrapper for compatibility - FIX: Convert cv::Size to CvSize
         CvSize sz = cvSize(image_size.width, image_size.height);
         temp_ipl_images.push_back(cvCreateImageHeader(sz, p_image->depth, p_image->nChannels));
-        // 手动设置IplImage数据指针，避免cvSetData
+        // Manually set the IplImage data pointer to avoid cvSetData
         temp_ipl_images.back()->imageData = (char *)image_mats[i].data;
         temp_ipl_images.back()->widthStep = image_mats[i].step[0];
         temp_ipl_images.back()->imageDataOrigin = (char *)image_mats[i].data;

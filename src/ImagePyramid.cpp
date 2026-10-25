@@ -1,10 +1,3 @@
-// File description
-/*!
-  Copyright \htmlonly &copy \endhtmlonly 2008-2011 Cranfield University
-  \file ImagePyramid.cpp
-  \brief ImagePyramid class implementation
-  \author Ioannis Katramados
-*/
 
 // Include Files
 #include "stdafx.h"

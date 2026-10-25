@@ -1,19 +1,10 @@
-// File description
-/*!
-  Copyright \htmlonly &copy \endhtmlonly 2008-2011 Cranfield University
-  \file PluginGradientFlow/GradientDetector.cpp
-  \brief GradientDetector class implementation
-  \author Ioannis Katramados
-*/
+
 
 #include "stdafx.h"
-// Include Files
 #include "GradientDetector.h"
-
-// new for gettickcount()
 #include <chrono>
 
-using namespace std; // new
+using namespace std; 
 
 //! Class constructor
 GradientDetector::GradientDetector()
@@ -62,6 +53,9 @@ void GradientDetector::Create(IplImage *p_image, int p_window_width, int p_windo
         matrix_size.height = static_cast<int>(floor((double)(image_size.height - window_size.height) / (double)p_step_y));
         std::cout << "GradientDetector::Create - Image size: " << p_image->width << "x" << p_image->height << std::endl;
         std::cout << "Image depth: " << p_image->depth << ", channels: " << p_image->nChannels << std::endl;
+
+        std::cout << "CPU matrix_size: " << matrix_size.width << "x" << matrix_size.height 
+          << " = " << matrix_size.width * matrix_size.height << std::endl;
         // Allocate memory
         gradient_matrix = (Gradient **)malloc(matrix_size.height * sizeof(Gradient *));
         x = 0;
@@ -197,7 +191,6 @@ int GradientDetector::DetectGradients(IplImage *p_image_src, int p_window_width,
     }
     else
     {
-        // 确保src_mat是8位类型
         if (src_mat.type() != CV_8UC1)
         {
             src_mat.convertTo(image_8u_mat, CV_8UC1);
