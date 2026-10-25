@@ -307,8 +307,8 @@ public:
 
 class RaftTrtRunner
 {
-public:
-    bool init(const std::string &engine_path)
+public:  
+    bool init(const std::string &engine_path) // 读文件 → runtime → engine → context，固定步骤加载 TensorRT Engine，骨架几乎都是这四步
     {
         if (initialized_ && engine_path_ == engine_path)
             return true;
@@ -316,12 +316,12 @@ public:
         reset();
         engine_path_ = engine_path;
 
-        std::ifstream file(engine_path, std::ios::binary);
+        std::ifstream file(engine_path, std::ios::binary); // 用二进制模式打开引擎文件
         if (!file.is_open())
             return false;
-        file.seekg(0, std::ios::end);
+        file.seekg(0, std::ios::end); // 将文件指针移动到文件末尾
         const std::streamoff size = file.tellg();
-        file.seekg(0, std::ios::beg);
+        file.seekg(0, std::ios::beg); // 将文件指针移动到文件开头
         if (size <= 0)
             return false;
 
@@ -336,7 +336,7 @@ public:
         engine_.reset(runtime_->deserializeCudaEngine(engine_data.data(), engine_data.size())); // 反序列化CUDA引擎
         if (!engine_)
             return false;
-        context_.reset(engine_->createExecutionContext()); // 创建执行上下文
+        context_.reset(engine_->createExecutionContext()); // 创建执行上下文, 真正拿某一对图像去算，用的是这个上下文context,不是文件本身
         if (!context_)
             return false;
 
@@ -354,6 +354,7 @@ public:
         if (img1.empty() || img2.empty() || img1.size() != img2.size())
             return false;
 
+        // 补边：RAFT 要求高宽是 8 的倍数。左右对称补、高度只补底部，和 Python InputPadder(kitti) 一致。
         const int src_h = img1.rows;
         const int src_w = img1.cols;
         const int pad_h = (8 - (src_h % 8)) % 8;
@@ -512,6 +513,7 @@ public:
                   << " pad(lrtb)=" << pad_left << "," << pad_right << "," << pad_top << "," << pad_bottom
                   << std::endl;
 
+        // FP16：engine 若输出半精度，先拷回 CPU 再转成 float，后面查表统一用 float。
         if (primary_dtype == nvinfer1::DataType::kFLOAT)
         {
             if (cudaMemcpy(out.data(), out_dev, out_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess)
@@ -853,6 +855,7 @@ bool RaftEngineTRT::estimateMatchesBatch(
 {
     const std::string backend = envOrDefault("DEGRAF_RAFT_BACKEND", "trt");
     const bool allow_lk_fallback = envEnabled("DEGRAF_ALLOW_LK_FALLBACK", false);
+    // 取样开关：pad_aware 用补边后的坐标；出界可丢点；图外读 0 还是夹到边缘。
     const std::string sample_mode = toLower(envOrDefault("DEGRAF_RAFT_SAMPLE_MODE", "legacy"));
     const bool pad_aware_sampling = (sample_mode == "pad_aware");
     const bool require_dst_in_bounds = envEnabled("DEGRAF_RAFT_REQUIRE_DST_IN_BOUNDS", false);
@@ -860,6 +863,7 @@ bool RaftEngineTRT::estimateMatchesBatch(
     const std::string sample_padding = toLower(envOrDefault("DEGRAF_RAFT_SAMPLE_PADDING", "zeros"));
     const bool sample_zero_padding = (sample_padding != "replicate");
 
+    // LK 回退：不用 TensorRT，改用传统稀疏光流。默认 DEGRAF_ALLOW_LK_FALLBACK 关闭。
     if (backend == "lk" || backend == "lk_fallback")
         return runLkFallback(batch_i1, batch_i2, batch_points, batch_matches);
 
@@ -958,6 +962,7 @@ bool RaftEngineTRT::estimateMatchesBatch(
             }
         }
 
+        // sx/sy：稠密光流图和原图宽高比。legacy 模式用它把特征点坐标缩放到光流图上。
         const float sx = static_cast<float>(dense_flow.cols) / static_cast<float>(batch_i1[i].cols);
         const float sy = static_cast<float>(dense_flow.rows) / static_cast<float>(batch_i1[i].rows);
         const float inv_sx = (sx > 1e-6f) ? (1.0f / sx) : 1.0f;
@@ -971,17 +976,28 @@ bool RaftEngineTRT::estimateMatchesBatch(
         {
             float fx = p.x * sx;
             float fy = p.y * sy;
+            // pad_aware：不缩放，直接加上左侧补边量，对齐 kitti padder 的坐标系。
             if (pad_aware_sampling)
             {
-                fx = p.x + static_cast<float>(pad_left);
-                fy = p.y + static_cast<float>(pad_top);
+                fx = p.x + static_cast<float>(pad_left); // 加上左侧补边量，对齐 kitti padder 的坐标系
+                fy = p.y + static_cast<float>(pad_top); // 加上顶部补边量，对齐 kitti padder 的坐标系
             }
             // Python RAFT path uses grid_sample (out-of-range still produces values).
             // Keep this optional filter only for robustness experiments.
+            // 取样点出界：可选丢掉，避免在图外掺位移。
             if (require_sample_in_bounds &&
                 (fx < 0 || fy < 0 || fx >= dense_flow.cols || fy >= dense_flow.rows))
                 continue;
             // bilinearSample 一次只从一层里读出一个数，读哪一层由 channel * h * w 决定：
+            /***
+            flow_chw：第一参已经拷回 CPU 的整张光流表。前半是每个像素的 du，后半是 dv
+            0 / 1：第二参：读哪一层。0 读水平位移 du，1 读垂直位移 dv
+            dense_flow.rows：第三参：光流图的高
+            dense_flow.cols：第四参：光流图的宽
+            fy, fx：第五、六参：要读的位置。注意顺序是先 y 再 x，和函数定义一致，fx是x方向的偏移量，fy是y方向的偏移量
+            sample_zero_padding：最后一参：点落到图外时，这一格按 0 算（为真时）
+            同一个点调用两次，是因为一次只能读一层。
+            */
             const float du = bilinearSample(flow_chw, 0, dense_flow.rows, dense_flow.cols, fy, fx, sample_zero_padding); // 获取x方向的偏移量
             const float dv = bilinearSample(flow_chw, 1, dense_flow.rows, dense_flow.cols, fy, fx, sample_zero_padding); // 获取y方向的偏移量
 
@@ -992,6 +1008,7 @@ bool RaftEngineTRT::estimateMatchesBatch(
                 p.y + (pad_aware_sampling ? dv : (dv * inv_sy)));
             const float dx = p.x - d.x;
             const float dy = p.y - d.y;
+            // 过滤：位移太长，或终点跑出第 11 帧画面，这个点不交给 InterpoNet。
             if (max_flow_length > 0 &&
                 std::sqrt(dx * dx + dy * dy) >= static_cast<float>(max_flow_length))
                 continue;
@@ -1006,6 +1023,7 @@ bool RaftEngineTRT::estimateMatchesBatch(
             matches.dst_points.push_back(d);
         }
 
+        // 计时与调试：打印匹配点数；若设置了 dump 目录，把点对写成文本。
         std::cout << "[PROFILE][RaftEngineTRT][Frame " << i << "] src_points=" << src.size()
                   << " matched_points=" << matches.dst_points.size()
                   << " trt_ms=" << trt_ms << std::endl;

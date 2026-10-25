@@ -1,12 +1,17 @@
 build/
 build_cpu/
 build_cpu_try/
+build_gpu/
 .vscode/
 .DS_Store
+
+# Local study notes (keep on disk, do not publish)
+teaching_learning_center/
 
 # Dataset / generated data
 data/
 external/RAFT/data/
+external/InterpoNet/data/
 
 # Temporary / backup
 backup/
@@ -20,10 +25,16 @@ opencv_contrib/
 external/InterpoNet/models/
 external/InterpoNet/model.yml
 external/InterpoNet/.git.bak/
+external/RAFT/models/
 external/**/checkpoints/
 external/**/weights/
+external/**/__pycache__/
 
-# ML weights / checkpoints
+# Python cache
+**/__pycache__/
+*.py[cod]
+
+# ML weights / checkpoints / TensorRT engines
 *.ckpt
 *.ckpt.*
 *.pth
@@ -32,3 +43,4 @@ external/**/weights/
 *.pb
 *.h5
 *.tflite
+*.engine

@@ -150,10 +150,16 @@ if command -v nvcc >/dev/null 2>&1; then
   fi
   echo "[INFO] CUDA toolkit detected, building with USE_CUDA=ON"
   echo "[INFO] CMAKE_BUILD_TYPE=${BUILD_TYPE}"
+  CUDA_ARCH="${DEGRAF_CUDA_ARCH:-}"
+  if [ -z "${CUDA_ARCH}" ] && command -v nvidia-smi >/dev/null 2>&1; then
+    CUDA_ARCH="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d '.')"
+  fi
+  CUDA_ARCH="${CUDA_ARCH:-86}"
+  echo "[INFO] CMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH}"
   if [ -n "${CMAKE_EXTRA_ARGS}" ]; then
     echo "[INFO] Additional CMake args: ${CMAKE_EXTRA_ARGS}"
   fi
-  cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" -DCMAKE_CUDA_ARCHITECTURES=75 ${CMAKE_EXTRA_ARGS}
+  cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" ${CMAKE_EXTRA_ARGS}
 else
   if [ "${DEGRAF_ALLOW_CPU_FALLBACK}" = "1" ]; then
     BUILD_DIR="${DEGRAF_PROJECT_ROOT}/build_cpu"

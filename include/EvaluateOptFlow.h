@@ -75,7 +75,12 @@ public:
 	std::vector<OptFlowMetrics> runEvaluation(const String &method, bool display_images, const std::vector<int> &image_indices);
     void calculateStatsForMetrics(Mat errors, Mat mask, OptFlowMetrics& metrics);
     void clearResults();
+    // Internal/debug table: EPE + RX thresholds (project-local).
     void exportOpticalFlowTableCSV(
+        const std::string& csv_path,
+        const std::map<std::string, std::vector<OptFlowMetrics>>& method_results);
+    // Paper Table I style on KITTI training: EPE + official Fl-bg/Fl-fg/Fl-all.
+    void exportPaperOpticalFlowTableCSV(
         const std::string& csv_path,
         const std::map<std::string, std::vector<OptFlowMetrics>>& method_results);
 };

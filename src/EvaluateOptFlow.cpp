@@ -245,6 +245,14 @@ static float stat_AX(Mat hist, int cutoff_count, float max_value)
 	return (float)bin / bin_count * max_value;
 }
 
+static void computeOfficialFlMetrics(
+	const Mat &pred_flow,
+	const Mat &gt_flow,
+	const Mat &obj_map,
+	float &fl_bg,
+	float &fl_fg,
+	float &fl_all);
+
 void EvaluateOptFlow::calculateStats(Mat errors, Mat mask = Mat(), bool display_images = false)
 {
 	float R_thresholds[] = {0.5f, 1.f, 2.f, 3.f, 5.f, 10.f};
@@ -708,6 +716,18 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
                 
                 // At the same time, extract indicators to the metrics structure
                 calculateStatsForMetrics(computed_errors, mask, metrics);
+
+                // Official KITTI Fl (training local): same formula as devkit_scene_flow.
+                String obj_map_path = getDataSceneFlowRoot() + "/training/obj_map/" + data.num_str + "_10.png";
+                Mat obj_map = imread(obj_map_path, cv::IMREAD_UNCHANGED);
+                if (obj_map.empty())
+                {
+                    printf("[WARN] Missing obj_map for Fl metrics: %s\n", obj_map_path.c_str());
+                }
+                computeOfficialFlMetrics(flow, ground_truth, obj_map,
+                                         metrics.Fl_bg, metrics.Fl_fg, metrics.Fl_all);
+                printf("Official Fl-bg: %.2f%% | Fl-fg: %.2f%% | Fl-all: %.2f%%\n",
+                       metrics.Fl_bg, metrics.Fl_fg, metrics.Fl_all);
                 
 
                 if (display_images) {
@@ -842,6 +862,77 @@ void EvaluateOptFlow::calculateStatsForMetrics(Mat errors, Mat mask, OptFlowMetr
     }
 }
 
+// KITTI official outlier (devkit_scene_flow): err > 3px AND err / |gt| > 5%.
+// obj_map: 0 = background, >0 = foreground. Percentages are in [0, 100].
+static void computeOfficialFlMetrics(
+    const Mat &pred_flow,
+    const Mat &gt_flow,
+    const Mat &obj_map,
+    float &fl_bg,
+    float &fl_fg,
+    float &fl_all)
+{
+    fl_bg = fl_fg = fl_all = 0.0f;
+    if (pred_flow.empty() || gt_flow.empty() ||
+        pred_flow.size() != gt_flow.size() ||
+        pred_flow.type() != CV_32FC2 || gt_flow.type() != CV_32FC2)
+        return;
+
+    const float abs_thresh = 3.0f;
+    const float rel_thresh = 0.05f;
+    long n_bg = 0, n_fg = 0, err_bg = 0, err_fg = 0;
+
+    for (int y = 0; y < gt_flow.rows; ++y)
+    {
+        const Vec2f *gt_row = gt_flow.ptr<Vec2f>(y);
+        const Vec2f *pr_row = pred_flow.ptr<Vec2f>(y);
+        for (int x = 0; x < gt_flow.cols; ++x)
+        {
+            const Point2f gt(gt_row[x][0], gt_row[x][1]);
+            const Point2f pr(pr_row[x][0], pr_row[x][1]);
+            if (!isFlowCorrect(gt) || !isFlowCorrect(pr))
+                continue;
+
+            const float du = gt.x - pr.x;
+            const float dv = gt.y - pr.y;
+            const float dist = std::sqrt(du * du + dv * dv);
+            const float mag = std::sqrt(gt.x * gt.x + gt.y * gt.y);
+            const bool is_outlier = (dist > abs_thresh) && (dist > rel_thresh * mag);
+
+            bool is_fg = false;
+            if (!obj_map.empty() && obj_map.size() == gt_flow.size())
+            {
+                if (obj_map.type() == CV_8UC1)
+                    is_fg = obj_map.at<uchar>(y, x) > 0;
+                else if (obj_map.type() == CV_16UC1)
+                    is_fg = obj_map.at<ushort>(y, x) > 0;
+            }
+
+            if (is_fg)
+            {
+                ++n_fg;
+                if (is_outlier)
+                    ++err_fg;
+            }
+            else
+            {
+                ++n_bg;
+                if (is_outlier)
+                    ++err_bg;
+            }
+        }
+    }
+
+    const long n_all = n_bg + n_fg;
+    const long err_all = err_bg + err_fg;
+    if (n_bg > 0)
+        fl_bg = 100.0f * static_cast<float>(err_bg) / static_cast<float>(n_bg);
+    if (n_fg > 0)
+        fl_fg = 100.0f * static_cast<float>(err_fg) / static_cast<float>(n_fg);
+    if (n_all > 0)
+        fl_all = 100.0f * static_cast<float>(err_all) / static_cast<float>(n_all);
+}
+
 
 // Clear result function
 void EvaluateOptFlow::clearResults() 
@@ -858,7 +949,7 @@ void EvaluateOptFlow::exportOpticalFlowTableCSV(
     if (!file.is_open())
         return;
 
-    // Export only metrics that are actually computed in this project.
+    // Project-local debug metrics (EPE + RX). Not KITTI Fl.
     file << "Method,Average EPE,Average R2.0,Average R3.0,Average Time(ms),Average STD\n";
 
     for (const auto &method_pair : method_results)
@@ -885,6 +976,45 @@ void EvaluateOptFlow::exportOpticalFlowTableCSV(
              << (avg_r3 / n) << ","
              << (avg_time / n) << ","
              << (avg_std / n) << "\n";
+    }
+}
+
+void EvaluateOptFlow::exportPaperOpticalFlowTableCSV(
+    const std::string &csv_path,
+    const std::map<std::string, std::vector<OptFlowMetrics>> &method_results)
+{
+    std::ofstream file(csv_path, std::ios::trunc);
+    if (!file.is_open())
+        return;
+
+    // Paper Table I style on KITTI-2015 training (local GT available).
+    // Fl uses official outlier: error>3px AND error/|gt|>5%, split by obj_map.
+    file << "Method,EPE(px),Fl-bg(%),Fl-fg(%),Fl-all(%),Runtime(ms)\n";
+
+    for (const auto &method_pair : method_results)
+    {
+        const std::string &method_name = method_pair.first;
+        const std::vector<OptFlowMetrics> &results = method_pair.second;
+        if (results.empty())
+            continue;
+
+        double avg_epe = 0.0, avg_fl_bg = 0.0, avg_fl_fg = 0.0, avg_fl_all = 0.0, avg_time = 0.0;
+        for (const auto &m : results)
+        {
+            avg_epe += m.EPE;
+            avg_fl_bg += m.Fl_bg;
+            avg_fl_fg += m.Fl_fg;
+            avg_fl_all += m.Fl_all;
+            avg_time += m.time_ms;
+        }
+
+        const double n = static_cast<double>(results.size());
+        file << method_name << ","
+             << (avg_epe / n) << ","
+             << (avg_fl_bg / n) << ","
+             << (avg_fl_fg / n) << ","
+             << (avg_fl_all / n) << ","
+             << (avg_time / n) << "\n";
     }
 }
 

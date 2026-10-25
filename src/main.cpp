@@ -84,6 +84,7 @@ static void freezeBaselineOutputs(
 	const string ts = makeTimestamp();
 
 	copyFileBinary("../data/outputs/table_i_optical_flow.csv", baseline_dir + "/table_i_optical_flow_" + ts + ".csv");
+	copyFileBinary("../data/outputs/table_i_optical_flow_official.csv", baseline_dir + "/table_i_optical_flow_official_" + ts + ".csv");
 	copyFileBinary("../data/outputs/table_ii_scene_flow.csv", baseline_dir + "/table_ii_scene_flow_" + ts + ".csv");
 
 	ofstream summary(baseline_dir + "/baseline_summary_" + ts + ".csv", ios::trunc);
@@ -277,6 +278,7 @@ int main(int argc, char **argv)
 			cout << "# EPE      STD      0.5     1        2        3       5       10       time\n";
 
 			double avg_EPE = 0, avg_std = 0, avg_R05 = 0, avg_R1 = 0, avg_R2 = 0, avg_R3 = 0, avg_R5 = 0, avg_R10 = 0, avg_time = 0;
+			double avg_Fl_bg = 0, avg_Fl_fg = 0, avg_Fl_all = 0;
 
 			for (size_t j = 0; j < results.size(); j++)
 			{
@@ -296,6 +298,9 @@ int main(int argc, char **argv)
 				avg_R5 += metrics.R5;
 				avg_R10 += metrics.R10;
 				avg_time += metrics.time_ms;
+				avg_Fl_bg += metrics.Fl_bg;
+				avg_Fl_fg += metrics.Fl_fg;
+				avg_Fl_all += metrics.Fl_all;
 			}
 
 			size_t count = results.size();
@@ -305,10 +310,14 @@ int main(int argc, char **argv)
 			cout << "Average R3.0: " << avg_R3 / count << "\n";
 			cout << "Average Time: " << avg_time / count << " ms\n";
 			cout << "Average STD: " << avg_std / count << "\n";
+			cout << "Official Fl-bg: " << avg_Fl_bg / count << "%\n";
+			cout << "Official Fl-fg: " << avg_Fl_fg / count << "%\n";
+			cout << "Official Fl-all: " << avg_Fl_all / count << "%\n";
 			cout << "--------------------------------------------\n";
 		}
 	}
 	evaluator.exportOpticalFlowTableCSV("../data/outputs/table_i_optical_flow.csv", optical_method_results);
+	evaluator.exportPaperOpticalFlowTableCSV("../data/outputs/table_i_optical_flow_official.csv", optical_method_results);
 
 	////////////////////////// 3D Scene Flow evaluation //////////////////////////
 	EvaluateSceneFlow evaluatorscene;
