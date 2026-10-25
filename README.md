@@ -10,6 +10,8 @@ The pipeline combines:
 
 This project extends the original **DeGraF-Flow** framework (Stephenson et al., ICIP 2019) with modern GPU and deep-learning modules.
 
+A RealSense conveyor prototype lives under `tools/realsense/`: Mac live status uses CPU Farneback; offline scene flow uses the TensorRT path on GPU. Both share the same three-panel IDLE/MOVING UI. See `tools/realsense/README_LIVE_MAC.md`.
+
 ---
 
 ## Project Structure
@@ -22,6 +24,8 @@ DEGRAF_FLOW_GPU/
 ├── external/                  # Third-party models (RAFT / InterpoNet)
 │   ├── RAFT/                  # Cloned from RAFT GitHub
 │   └── InterpoNet/            # Cloned from InterpoNet GitHub
+├── tools/
+│   └── realsense/             # Live grab, record, KITTI convert, replay UI
 ├── data/
 │   ├── data_scene_flow/       # KITTI 2015 dataset
 │   ├── devkit_scene_flow/     # KITTI devkit evaluation tools
